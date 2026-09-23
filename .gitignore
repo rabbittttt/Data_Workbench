@@ -22,3 +22,6 @@ output_file/
 .venv/
 venv/
 node_modules/
+.idea/
+.vscode/
+.codex/
