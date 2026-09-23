@@ -113,6 +113,28 @@ function chartAxisIsTime(series={},keys=[]){
   // Bare numeric identifiers alone are not evidence of a vertical time axis.
   return values.some(value=>{const label=contextualPeriodLabel(value,series);return isPeriodColumn(label)&&(series.wide||isTimeField(series.dimension||'')||!/^\d+$/.test(label));});
 }
+function categoryAxisDimension(name=''){
+  const key=String(name).trim().toLowerCase().replace(/\s+/g,'');
+  const aliases=[['车型','车型名称','车辆型号','model'],['车系','车系名称'],['版本','版本名称','version'],['区域','地区','region'],['门店','门店名称','store'],['渠道','渠道名称','channel']];
+  return aliases.find(group=>group.includes(key))?.[0]||key;
+}
+function categoryAxesCompatible(left,leftKeys,right,rightKeys){
+  // A matrix's dimension identifies its rows, not its column-header axis.
+  if(!left.wide&&!right.wide){
+    const dimension=categoryAxisDimension(left.dimension);
+    return !!dimension&&dimension===categoryAxisDimension(right.dimension);
+  }
+  const labels=keys=>[...new Set(Array.from(keys,String).map(value=>value.trim()).filter(value=>value&&!isTotalLabel(value)))];
+  const a=labels(leftKeys),b=labels(rightKeys);
+  if(!a.length||!b.length)return false;
+  const shared=a.filter(value=>b.includes(value));
+  // Both header axes refer to actual field names; overlapping fields can align.
+  if(left.wide&&right.wide)return shared.length>0;
+  // Across reading directions, require evidence from multiple literal categories.
+  // A single common value or generic codes such as 0/1 and A/B are ambiguous.
+  const meaningful=value=>!/^(?:[+-]?\d+(?:\.\d+)?|[a-z]|是|否|其他|其它|未知|未填写)$/i.test(value);
+  return shared.filter(meaningful).length>=2&&shared.length===Math.min(a.length,b.length);
+}
 function inferChartMapping(table,rows=[],requestedMetric=''){
   const fields=table?.fields||[],defaults=chartDefaults({...(table||{}),fields});
   const nonempty=value=>value!=null&&String(value).trim()!==''&&!isTotalLabel(value);
@@ -175,7 +197,7 @@ function seriesWarning(series){
   if(series.some(s=>s.operation==='平均值'&&isRatioField(metric(s))))notes.push('比例为算术平均，不等于总体转化率');
   if(series.some(s=>/累计/.test(metric(s))))notes.push('累计指标默认取最后一条有效值，请核对原表顺序');
   if(series.some(s=>s.dimension===s.metric))notes.push('横轴与指标相同，请确认是否需要数值分布');
-  if(new Set(series.map(s=>s.dimension)).size>1)notes.push('横轴名称不同，仅按相同标签对齐，不代表业务口径一致');
+  if(new Set(series.map(s=>s.dimension)).size>1)notes.push('横轴名称不同，请核对类别含义；不兼容时独立展示');
   if(new Set(series.map(s=>metric(s)+'|'+s.operation)).size>1)notes.push('指标或统计方式不同，推荐独立分面，避免误读单位');
   return notes.join('；');
 }

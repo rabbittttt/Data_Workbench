@@ -93,6 +93,17 @@ button.link{min-height:32px;padding:4px 6px}
 .mapping-hint .meta{margin:0}
 .mapping-hint .link{align-self:flex-start}
 #mappingSummary{font-size:13px}
+.metric-source{display:inline-block;margin-left:8px;color:var(--text-secondary);font-size:11px;white-space:nowrap}
+#metricChoices .series-choices{max-height:174px;overflow-y:auto;overscroll-behavior:contain}
+.metric-axis-fields{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.metric-preview{display:grid;gap:5px;margin:10px 0;font-size:12px;line-height:1.5}
+.metric-preview:empty{display:none}
+.metric-preview>div{display:flex;gap:12px;flex-wrap:wrap;min-width:0}
+.metric-preview strong{font-weight:500;overflow-wrap:anywhere}
+.metric-preview span{color:var(--text-secondary);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.row-recognition{margin:8px 0}
+.row-recognition>summary{cursor:pointer;min-height:38px;padding:8px 0;font-size:13px}
+.row-recognition>summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 .mapping-picker,.series-picker,.mapping-measures,.mapping-inline{min-width:0;max-width:100%}
 .picker-tools{gap:8px}
 .picker-tools input{flex:1 1 180px;min-width:0}
@@ -156,6 +167,7 @@ button.link{min-height:32px;padding:4px 6px}
   .studio-builder>#studioBuilder{padding:10px 12px 14px}
   .studio-builder .compact-fields{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .studio-builder .compact-fields>label:has(#studioFile),.studio-builder .compact-fields>label:has(#studioTable){grid-column:1/-1}
+  .studio-builder .compact-fields>label:has(#studioSheet){grid-column:1/-1}
   .studio-builder .studio-fields label,.raw-toolbar label{font-size:13px}
   button,input,select,.studio-builder .studio-fields select,.studio-builder .studio-actions button,.picker-tools button,.picker-pages button{min-height:44px}
   input:not([type=checkbox]):not([type=radio]),select,.studio-builder .studio-fields select{font-size:16px;padding:8px 10px}
@@ -185,6 +197,7 @@ button.link{min-height:32px;padding:4px 6px}
   .mapping-picker>.series-picker{padding-left:10px;padding-right:10px}
   .series-choices{grid-template-columns:minmax(0,1fr)}
   .series-choices label,.mapping-picker .series-choices label{min-height:44px;font-size:14px}
+  .row-recognition>summary{min-height:44px}
   .picker-tools input{flex-basis:100%;max-width:none}
   .picker-tools button{flex:1}
   .picker-tools .meta{flex-basis:100%}

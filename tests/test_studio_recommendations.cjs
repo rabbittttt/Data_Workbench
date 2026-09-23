@@ -51,6 +51,10 @@ const types=()=>options.map(o=>o.series[0].type);
   assert.deepEqual(JSON.parse(JSON.stringify(options[2].series[0].data)),[{name:'A',value:300},{name:'B',value:600}]);
   assert.match(elements.get('#studioRecommendations').innerHTML,/所选项数值构成/);
 
+  const columnSeries={...ordered,wide:false,dimension:'分类',metric:'2026-03',vehicleField:'',vehicleValue:'',label:'列指标'};
+  await run([ordered,columnSeries]);
+  assert.deepEqual(types(),['line'],'mixed row and column mappings cannot produce a misleading latest-period ranking');
+
   const negative={rows:data.rows.map(r=>r.统计类型==='数量'&&r.分类==='B'?{...r,'2026-03':-10}:r)};
   await run([ordered,other],negative);
   assert.deepEqual(types(),['line','bar'],'negative values never produce a composition pie');

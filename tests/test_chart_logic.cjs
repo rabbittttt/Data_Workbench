@@ -42,7 +42,6 @@ assert.ok(studio.includes('时间趋势'));
 assert.ok(studio.includes('末期分类排名'));
 assert.ok(studio.includes('studioUpdate'));
 assert.ok(studio.includes('seriesChoices'));
-assert.ok(studio.includes('横向时间序列'));
 assert.ok(studio.includes('periodGrainLabel(g.grain)'));
 assert.ok(studio.includes("swap.id='swapAxes'"));
 assert.ok(studio.includes("state.axisSwapped=!state.axisSwapped"));

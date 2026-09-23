@@ -176,6 +176,9 @@ function drawComparison(){
   const temporal=valid.length>0&&temporalFlags.every(Boolean);
   const usedSignatures=signatures.filter(s=>s!=='empty');
   const incompatibleTime=temporalFlags.some(Boolean)&&(new Set(usedSignatures).size>1||usedSignatures.some(s=>s.startsWith('mixed:'))||temporalFlags.some(t=>!t));
+  const categoryIndexes=valid.map((_,i)=>i).filter(i=>!temporalFlags[i]&&groups[i].size);
+  const incompatibleCategory=categoryIndexes.some((left,index)=>categoryIndexes.slice(index+1).some(right=>!categoryAxesCompatible(valid[left],groups[left].keys(),valid[right],groups[right].keys())));
+  const incompatibleAxes=incompatibleTime||incompatibleCategory;
   const metricKey=s=>(s.businessMetric||s.metric)+'|'+s.operation;
   const orderKeys=(keys,values,s,time)=>{
     const order=s?.axisOrder||'auto';
@@ -184,10 +187,10 @@ function drawComparison(){
     return keys;
   };
   const ownKeys=groups.map((g,i)=>orderKeys([...g.keys()],g,valid[i],temporalFlags[i]));
-  const keys=incompatibleTime?[]:orderKeys([...new Set(groups.flatMap(g=>[...g.keys()]))],groups[0],valid[0],temporal);
+  const keys=incompatibleAxes?[]:orderKeys([...new Set(groups.flatMap(g=>[...g.keys()]))],groups[0],valid[0],temporal);
   const limitKeys=(values,time,s)=>state.limit==='全部'?values:time&&['auto','time'].includes(s?.axisOrder||'auto')?values.slice(-Number(state.limit)):values.slice(0,Number(state.limit));
   const shown=limitKeys(keys,temporal,valid[0]),ownShown=ownKeys.map((values,i)=>limitKeys(values,temporalFlags[i],valid[i]));
-  const type=state.chartType==='table'?'table':incompatibleTime?'facet':state.chartType==='auto'?(new Set(valid.map(metricKey)).size>1?'facet':temporal?'line':'bar'):state.chartType;
+  const type=state.chartType==='table'?'table':incompatibleAxes?'facet':state.chartType==='auto'?(new Set(valid.map(metricKey)).size>1?'facet':temporal?'line':'bar'):state.chartType;
   const swapped=!!state.axisSwapped;
   const facetSize=6,facetPages=Math.max(1,Math.ceil(groups.length/facetSize));
   const facetSignature=JSON.stringify([type,labels]);
@@ -203,9 +206,10 @@ function drawComparison(){
     $('#facetNext').onclick=()=>{state.facetPage++;drawComparison();};
   }
   const orderMismatch=type!=='facet'&&new Set(valid.map(s=>s.axisOrder||'auto')).size>1;
-  $('#recommendNote').textContent=(state.chartPreview?'草稿预览 · 尚未应用。':'已应用 · ')+(incompatibleTime?'时间粒度或年份口径不同，已强制独立分面；各组使用自己的横轴，不计算组间差值。':temporal?'推荐趋势折线；同粒度时间自动对齐，缺失值保留断点。':'推荐分类柱状图，多系列并排显示。')+` 共 ${valid.length} 条系列，${paging?'本页':'图中'}显示 ${displayCount} 个数据项。${swapped?' 已交换 X / Y 轴。':''}`+(valid.length>20?' 系列较多，可用图例筛选或切换分面查看；已保留全部选择。':'')+(orderMismatch?' 共用横轴按第一组的排序设置。':'')+(errors.length?' 未绘制：'+errors.join('；'):'');
-  const rows=incompatibleTime?groups.flatMap((g,i)=>ownKeys[i].map(k=>({'系列':labels[i],'对比项':k,'数值':g.get(k)??null}))):keys.map(k=>{const row={'对比项':k};groups.forEach((g,i)=>row[labels[i]]=g.get(k)??null);if(state.baseline&&groups.length>1){const base=groups[0].get(k);groups.slice(1).forEach((g,j)=>{const value=g.get(k);row[labels[j+1]+' 差值']=value==null||base==null?null:value-base;row[labels[j+1]+' 变化率%']=value==null||base==null||base===0?null:(value-base)/base*100;});}return row;});
-  $('#baseline').disabled=incompatibleTime;
+  const axisReason=temporalFlags.some(Boolean)&&temporalFlags.some(value=>!value)?'时间与分类横轴不同':incompatibleTime?'时间粒度或年份口径不同':'分类横轴的维度不同，或无法确认类别含义一致';
+  $('#recommendNote').textContent=(state.chartPreview?'草稿预览 · 尚未应用。':'已应用 · ')+(incompatibleAxes?axisReason+'，已强制独立分面；各组使用自己的横轴，不计算组间差值。':temporal?'推荐趋势折线；同粒度时间自动对齐，缺失值保留断点。':'推荐分类柱状图，多系列并排显示。')+` 共 ${valid.length} 条系列，${paging?'本页':'图中'}显示 ${displayCount} 个数据项。${swapped?' 已交换 X / Y 轴。':''}`+(valid.length>20?' 系列较多，可用图例筛选或切换分面查看；已保留全部选择。':'')+(orderMismatch?' 共用横轴按第一组的排序设置。':'')+(errors.length?' 未绘制：'+errors.join('；'):'');
+  const rows=incompatibleAxes?groups.flatMap((g,i)=>ownKeys[i].map(k=>({'系列':labels[i],'对比项':k,'数值':g.get(k)??null}))):keys.map(k=>{const row={'对比项':k};groups.forEach((g,i)=>row[labels[i]]=g.get(k)??null);if(state.baseline&&groups.length>1){const base=groups[0].get(k);groups.slice(1).forEach((g,j)=>{const value=g.get(k);row[labels[j+1]+' 差值']=value==null||base==null?null:value-base;row[labels[j+1]+' 变化率%']=value==null||base==null||base===0?null:(value-base)/base*100;});}return row;});
+  $('#baseline').disabled=incompatibleAxes;
   $('#compareGrid').innerHTML=rows.length?grid(rows.slice(0,300),Object.keys(rows[0]))+(rows.length>300?`<p class="meta">预览前 300 / ${rows.length} 行；导出 CSV 包含全部行和系列。</p>`:''):'<div class="empty">没有匹配的数据，请调整筛选或维度。</div>';
   $('#exportCompare').onclick=()=>exportCSV(rows,rows.length?Object.keys(rows[0]):['对比项'],'数见-对比.csv');
   $('#compareChart').style.display=type==='table'?'none':'block';

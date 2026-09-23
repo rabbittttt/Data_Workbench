@@ -27,11 +27,18 @@ function openOriginal(id){
 }
 function resetChartDraft(id,metric=''){
   for(const key of Object.keys(draft))delete draft[key];
-  Object.assign(draft,{id,metric,filters:[],selectedValues:[],hierarchy:{},periods:[],excludeTotals:true,autoOperation:true,previewActive:true,commitMode:state.basket.length?'append':'replace'});
+  Object.assign(draft,{id,metric,filters:[],selectedValues:[],hierarchy:{},excludeTotals:true,autoOperation:true,readingMode:'auto',previewActive:true,commitMode:state.basket.length?'append':'replace'});
 }
 function loadChartDraftFromSeries(series,{editing=false}={}){
   resetChartDraft(series?.id||'',series?.metric||'');
   if(series)Object.assign(draft,structuredClone(series),{sourceId:series.id,metrics:[series.metric],label:series.customLabel===false?'':series.label,selectedValues:series.vehicleField?[series.vehicleValue]:[],filters:structuredClone(series.filters||[]),hierarchy:{},autoOperation:false,selectionTouched:true});
+  if(series){
+    draft.legacyRowSelection=!!series.wide;
+    draft.splitField=series.wide?'':series.vehicleField||'';
+    draft.splitValues=series.wide?[]:series.vehicleField?[series.vehicleValue]:[];
+    draft.splitSelectionTouched=true;
+    if(!series.wide){delete draft.periods;delete draft.seriesFields;}
+  }
   if(series?.filterField&&series.filterValue)draft.filters.push({field:series.filterField,value:series.filterValue});
   draft.previewActive=editing;draft.commitMode=editing?'update':state.basket.length?'append':'replace';
   if(editing&&series)draft.editUid=series.uid;else delete draft.editUid;
@@ -66,7 +73,7 @@ function bindStudioPicker(id,items,selected,onChange){
     const focusedChoice=focused?.type==='checkbox'&&focused.dataset?.choice!=null&&list.contains(focused)?focused.id:'';
     const filtered=matching(),pages=Math.max(1,Math.ceil(filtered.length/100));saved.page=Math.min(saved.page,pages-1);
     const shown=filtered.slice(saved.page*100,(saved.page+1)*100);
-    list.innerHTML=shown.map(item=>'<label><input id="'+id+'Choice'+items.indexOf(item)+'" type="checkbox" data-choice="'+items.indexOf(item)+'" '+(chosen.includes(item.value)?'checked':'')+'><span>'+esc(item.label)+'</span></label>').join('')||'<p class="meta">没有匹配项。</p>';
+    list.innerHTML=shown.map(item=>'<label><input id="'+id+'Choice'+items.indexOf(item)+'" type="checkbox" data-choice="'+items.indexOf(item)+'" '+(chosen.includes(item.value)?'checked':'')+'><span>'+esc(item.label)+(item.detail?'<small class="metric-source">'+esc(item.detail)+'</small>':'')+'</span></label>').join('')||'<p class="meta">没有匹配项。</p>';
     root.querySelector('[data-count]').textContent='已选 '+chosen.length+' / '+items.length;
     $('#'+id+'Summary').textContent='已选 '+chosen.length+(chosen.length?' · '+chosen.slice(0,2).map(v=>items.find(i=>i.value===v)?.label||v).join('、')+(chosen.length>2?' 等':''):'');
     root.querySelector('[data-action="all"]').textContent=saved.query?'全选搜索结果（'+filtered.length+'）':'全选（'+items.length+'）';
@@ -140,32 +147,40 @@ async function mountBuilder(token){
   const fields=t.fields.map(f=>f.name),groups=periodColumnGroups(t).filter(g=>g.columns.length>=2),defaults=chartDefaults(t);
   const inferred=inferChartMapping(t,data.rows,draft.metric);
   const useMapping=m=>{
-    Object.assign(draft,m,{sourceId:t.id,metric:m.metrics[0]||m.periods[0]||defaults.metric,periods:[...m.periods],metrics:[...m.metrics],seriesFields:[...m.seriesFields],operation:defaults.operation,vehicleField:'',selectedValues:[],hierarchy:{},rangeError:'',label:'',autoOperation:true,selectionTouched:false,labelFieldsTouched:false,mappingReason:m.reason,axisOrder:'auto'});
-    draft.periodGroupId=groups.find(g=>g.columns.join('|')===draft.periods.join('|'))?.id||'manual';
+    Object.assign(draft,m,{sourceId:t.id,dimension:m.wide?defaults.dimension:m.dimension,metric:m.metrics[0]||m.periods[0]||defaults.metric,metrics:[...m.metrics],operation:defaults.operation,vehicleField:'',selectedValues:[],splitField:'',splitValues:[],hierarchy:{},rangeError:'',label:'',autoOperation:true,selectionTouched:false,splitSelectionTouched:false,labelFieldsTouched:false,mappingReason:m.reason,axisOrder:'auto',readingMode:'auto'});
+    delete draft.inputKeys;delete draft.legacyRowSelection;delete draft.rowMode;
+    if(m.wide){draft.periods=[...m.periods];draft.seriesFields=[...m.seriesFields];}
+    else {delete draft.periods;delete draft.seriesFields;}
+    draft.periodGroupId=groups.find(g=>g.columns.join('|')===(draft.periods||[]).join('|'))?.id||'manual';
   };
   if(draft.sourceId!==t.id){useMapping(inferred);draft.filters=[];}
   draft.axisMode=draft.axisMode||'auto';draft.axisOrder=draft.axisOrder||'auto';
-  draft.metrics=draft.metrics||[draft.metric];
-  draft.periods=draft.periods||[];
-  if(draft.wide){
-    if(!draft.seriesFields?.length&&!draft.labelFieldsTouched)draft.seriesFields=mappingRowLabelFields(t,draft.periods);
-    draft.seriesFields=draft.seriesFields||[];
-    if(draft.vehicleField!=='__row_index__')draft.vehicleField=draft.seriesFields.length>1?'__row_labels__':draft.seriesFields[0]||'__row_index__';
-    draft.metric=draft.periods[0]||'';
-  }else if(!draft.dimension)draft.dimension=defaults.dimension;
+  if(draft.wide&&!fields.includes(draft.dimension))draft.dimension=defaults.dimension;
   draft.filters=draft.filters||[];
-  const labels=draft.wide?draft.seriesFields:[],rowIndices=new Map(data.rows.map((row,i)=>[row,i]));
-  const baseRows=data.rows.filter(r=>(!draft.excludeTotals||!labels.some(f=>isTotalLabel(r[f])))&&draft.filters.every(f=>!f.field||f.value===''||String(r[f.field]??'')===f.value));
-  const hierarchy=hierarchyChoices(baseRows,draft.vehicleField==='__row_labels__'?labels.slice(0,-1):[],draft.hierarchy||{});
-  draft.hierarchy=Object.fromEntries(hierarchy.levels.map(l=>[l.field,l.value]));
-  const candidates=draft.vehicleField?[...new Set(hierarchy.rows.map(r=>seriesRowValue(r,draft,rowIndices.get(r))).filter(v=>v!==''))]:[];
-  draft.selectedValues=draft.selectedValues||[];
-  if(!draft.selectionTouched&&draft.vehicleField&&!draft.selectedValues.length&&candidates.length)draft.selectedValues=[candidates[0]];
-  if(draft.autoOperation)draft.operation=draft.wide?wideOperation(t,draft.vehicleField,draft.selectedValues[0]||'',draft.seriesFields):chartOperation(t.fields.find(f=>f.name===draft.metrics[0]),t);
+  const catalog=chartMetricCatalog(t,data.rows,draft);
+  const hierarchy=hierarchyChoices(catalog.availableRows.map(item=>item.row),catalog.rowFields.slice(0,-1),draft.hierarchy||{});
+  draft.hierarchy=Object.fromEntries(hierarchy.levels.map(level=>[level.field,level.value]));
+  if(hierarchy.levels.some(level=>level.value)){
+    const rowsByIdentity=new Map(data.rows.map((row,index)=>[row,index]));
+    const allowed=new Set(hierarchy.rows.map(row=>chartRowInputKey(catalog.rowField,catalog.rowFields,seriesRowValue(row,{vehicleField:catalog.rowField,seriesFields:catalog.rowFields},rowsByIdentity.get(row)))));
+    catalog.items=catalog.items.filter(item=>item.kind==='column'||allowed.has(item.value));
+  }
+  draft.inputKeys=chartMetricSelection(draft,catalog);
+  draft.periods=[...catalog.rowPeriods];
+  if(!draft.legacyRowSelection)draft.seriesFields=[...catalog.rowFields];
+  const selectedItems=catalog.items.filter(item=>draft.inputKeys.includes(item.value));
+  const hasRows=selectedItems.some(item=>item.kind==='row')||draft.readingMode==='matrix';
+  const hasColumns=selectedItems.some(item=>item.kind==='column')||!hasRows;
+  const missingItems=draft.inputKeys.filter(key=>!catalog.items.some(item=>item.value===key)).map(key=>({value:key,label:'已失效 · '+chartMetricInputLabel(key),detail:'请重新选择'}));
+  const metricItems=[...catalog.items].sort((a,b)=>Number(b.kind===catalog.recommendedKind)-Number(a.kind===catalog.recommendedKind)).concat(missingItems);
+  const baseRows=catalog.availableRows.map(item=>item.row);
+  draft.splitField=draft.splitField||'';draft.splitValues=draft.splitValues||[];
+  const splitCandidates=draft.splitField?[...new Set(baseRows.map(row=>String(row[draft.splitField]??'')).filter(Boolean))]:[];
+  if(!draft.splitSelectionTouched&&draft.splitField&&!draft.splitValues.length&&splitCandidates.length)draft.splitValues=[splitCandidates[0]];
   const files=[...new Map(state.tables.map(t=>[t.file_path,t])).values()],sheets=[...new Set(state.tables.filter(x=>x.file_path===t.file_path).map(x=>x.sheet_name))],regions=state.tables.filter(x=>x.file_path===t.file_path&&x.sheet_name===t.sheet_name);
   const groupOptions=groups.map(g=>'<option value="'+esc(g.id)+'" '+(draft.periodGroupId===g.id?'selected':'')+'>'+esc(periodGrainLabel(g.grain)+(g.qualifier?' · '+g.qualifier:'')+'（'+g.columns.length+' 列）')+'</option>').join('');
   const numeric=t.fields.filter(f=>f.type==='number').map(f=>f.name);
-  const ops=['求和','平均值','最新值','最大值','最小值','有效数值计数','非空计数',...(!draft.wide?['总体比例']:[])];
+  const ops=['求和','平均值','最新值','最大值','最小值','有效数值计数','非空计数',...(!hasRows?['总体比例']:[])];
   const editing=draft.editUid!=null;
   if(!draft.commitMode||draft.commitMode==='update'&&!editing)draft.commitMode=editing?'update':state.basket.length?'append':'replace';
   const modes=[...(editing?[['update','更新所选系列']]:[]),...(state.basket.length?[['append','加入已有对比（保留已有）']]:[]),['replace',state.basket.length?'替换当前图表':'生成主图']];
@@ -173,24 +188,24 @@ async function mountBuilder(token){
   root.innerHTML='<div class="preview-bar">'+studioSelect('studioIntent','本次操作',modes.map(([mode,label])=>'<option value="'+mode+'" '+(mode===draft.commitMode?'selected':'')+'>'+label+'</option>').join(''))+'<span class="preview-status" id="draftStatus" role="status"></span></div><div class="studio-fields compact-fields">'+
     studioSelect('studioFile','文件',files.map(f=>'<option value="'+esc(f.file_path)+'" '+(f.file_path===t.file_path?'selected':'')+'>'+esc(f.relative_path||f.file_name)+'</option>').join(''))+
     studioSelect('studioSheet','工作表 / Sheet',options(sheets,t.sheet_name))+
-    studioSelect('studioTable','数据区域（自动识别）',regions.map(r=>'<option value="'+r.id+'" '+(r.id===t.id?'selected':'')+'>'+esc(r.table_name+' · '+r.range_ref)+'</option>').join(''))+
-    studioSelect('studioLayout','横轴从哪里取值','<option value="records" '+(!draft.wide?'selected':'')+'>某一列的内容（逐行读取）</option><option value="matrix" '+(draft.wide?'selected':'')+'>多个列的表头（横向读取）</option>')+
-    (draft.wide?studioSelect('studioPeriodGroup','横向时间序列快捷选择','<option value="manual" '+(draft.periodGroupId==='manual'?'selected':'')+'>自选列 · 时间或其他分类</option>'+groupOptions):studioSelect('studioDimension','横轴 / X 字段',options(fields,draft.dimension)))+
-    studioSelect('studioAxisMode','横轴含义','<option value="auto" '+(draft.axisMode==='auto'?'selected':'')+'>自动判断时间 / 分类</option><option value="time" '+(draft.axisMode==='time'?'selected':'')+'>按时间处理</option><option value="category" '+(draft.axisMode==='category'?'selected':'')+'>按普通分类（保留原标签）</option>')+'</div>'+
-    '<div class="mapping-hint"><span class="meta">'+esc(draft.mappingReason||'已载入保存的映射，可手动调整。')+'</span><button id="studioAuto" class="link">重新自动识别</button></div>'+
-    (draft.wide?studioPicker('columnChoices','横轴列 / 单元格数值',false)+
-      '<div class="studio-fields compact-fields">'+studioSelect('studioRowMode','系列如何区分','<option value="labels" '+(draft.vehicleField!=='__row_index__'?'selected':'')+'>按标识字段组合（可多级）</option><option value="index" '+(draft.vehicleField==='__row_index__'?'selected':'')+'>每个原始数据行独立展示</option>')+
-      '<div class="mapping-inline">'+(draft.vehicleField!=='__row_index__'?studioPicker('labelChoices','行标识字段',false):'<p class="meta">使用数据行号区分同名行，不合并同名项目。</p>')+'</div><p class="meta">列表头成为横轴，所选行的单元格成为数值；不限日期列。</p></div>':
-      '<div class="mapping-measures">'+(draft.operation==='总体比例'?'<p class="meta">当前指标：分子合计 ÷ 分母合计（在高级设置选择）。</p>':studioPicker('metricChoices','数值指标 / Y 轴（可多选）',false))+
-      studioSelect('studioSplit','拆分对比系列','<option value="">不拆分</option>'+options(fields,draft.vehicleField))+'</div>')+
-    (hierarchy.levels.length?'<details class="hierarchy-disclosure" '+(draft.hierarchyOpen?'open':'')+'><summary>按层级筛选 <span class="meta">可选 · '+hierarchy.levels.length+' 个字段</span></summary><div class="studio-fields compact-fields hierarchy-fields">'+hierarchy.levels.map((l,i)=>studioSelect('hierarchy'+i,l.field,'<option value="">全部</option>'+options(l.values,l.value))).join('')+'</div></details>':'')+
-    (draft.vehicleField?studioPicker('seriesChoices','展示系列',true):'')+
-    '<p class="meta" id="mappingSummary" aria-live="polite"></p>'+
-    '<details class="builder-more" '+(draft.advancedOpen?'open':'')+'><summary>高级设置 · 筛选、统计口径与名称</summary><div class="studio-fields">'+
+    studioSelect('studioTable','数据区域（自动识别）',regions.map(r=>'<option value="'+r.id+'" '+(r.id===t.id?'selected':'')+'>'+esc(r.table_name+' · '+r.range_ref)+'</option>').join(''))+'</div>'+
+    studioPicker('metricChoices','选择指标 / Y 轴',true)+
+    (hierarchy.levels.length?'<details class="hierarchy-disclosure" '+(draft.hierarchyOpen?'open':'')+'><summary>按层级筛选行指标 <span class="meta">可选 · '+hierarchy.levels.length+' 个字段</span></summary><div class="studio-fields compact-fields hierarchy-fields">'+hierarchy.levels.map((level,i)=>studioSelect('hierarchy'+i,level.field,'<option value="">全部</option>'+options(level.values,level.value))).join('')+'</div></details>':'')+
+    (draft.operation==='总体比例'?'<p class="meta">当前数值使用分子合计 ÷ 分母合计，可在高级设置调整。</p>':'')+
+    (hasColumns?'<div class="studio-fields metric-axis-fields">'+studioSelect('studioDimension',hasRows?'列指标的横轴 / X':'横轴 / X',options(fields,draft.dimension))+
+      studioSelect('studioSplit','拆分对比（可选）','<option value="">不拆分</option>'+options(fields,draft.splitField))+'</div>':'')+
+    (hasRows?studioPicker('columnChoices',hasColumns?'行指标的横轴 / X':'横轴 / X',false):'')+
+    (hasColumns&&draft.splitField?studioPicker('seriesChoices','选择对比项',true):'')+
+    '<div class="metric-preview" id="mappingPreview" aria-live="polite"></div><p class="meta" id="mappingSummary" aria-live="polite"></p>'+
+    '<details class="builder-more" '+(draft.advancedOpen?'open':'')+'><summary>高级设置 · 筛选、统计与数据识别</summary><div class="studio-fields">'+
+    studioSelect('studioLayout','数据读取方式','<option value="auto" '+(!draft.readingMode||draft.readingMode==='auto'?'selected':'')+'>自动 · 行、列指标均可选</option><option value="records" '+(draft.readingMode==='records'?'selected':'')+'>只选择列指标</option><option value="matrix" '+(draft.readingMode==='matrix'?'selected':'')+'>只选择行指标</option>')+
+    studioSelect('studioAxisMode','横轴含义','<option value="auto" '+(draft.axisMode==='auto'?'selected':'')+'>自动判断时间 / 分类</option><option value="time" '+(draft.axisMode==='time'?'selected':'')+'>按时间处理</option><option value="category" '+(draft.axisMode==='category'?'selected':'')+'>按普通分类（保留原标签）</option>')+
     studioSelect('studioOperation','统计方式','<option value="__auto__" '+(draft.autoOperation?'selected':'')+'>自动（各指标分别判断）</option>'+options(ops,draft.autoOperation?'':draft.operation))+
     studioSelect('studioAxisOrder','横轴排列','<option value="auto" '+(draft.axisOrder==='auto'?'selected':'')+'>自动（时间排序 / 分类原序）</option><option value="source" '+(draft.axisOrder==='source'?'selected':'')+'>保留原表顺序</option><option value="time" '+(draft.axisOrder==='time'?'selected':'')+'>按时间先后</option><option value="value" '+(draft.axisOrder==='value'?'selected':'')+'>按数值降序</option>')+
     '<label>系列名称（单系列时）<input id="studioLabel" value="'+esc(draft.label||'')+'" placeholder="留空自动命名"></label>'+
     (draft.operation==='总体比例'?studioSelect('studioNumerator','分子（合计）',options(['',...numeric],draft.numerator||''))+studioSelect('studioDenominator','分母（合计）',options(['',...numeric],draft.denominator||'')):'')+'</div>'+
+    '<details class="row-recognition" '+(draft.rowRecognitionOpen?'open':'')+'><summary>修正行指标识别</summary><div class="studio-fields">'+studioSelect('studioRowMode','同名行如何处理','<option value="labels" '+(catalog.rowField!=='__row_index__'?'selected':'')+'>按标识字段组合（可多级）</option><option value="index" '+(catalog.rowField==='__row_index__'?'selected':'')+'>每个原始数据行独立展示</option>')+'</div>'+studioPicker('labelChoices','行标识字段',false)+'</details>'+
+    '<div class="mapping-hint"><span class="meta">'+esc(draft.mappingReason||'已保留当前数据选择。')+'</span><button id="studioAuto" class="link">重新自动识别</button></div>'+
     '<div id="studioFilters">'+draft.filters.map((f,i)=>'<div class="filter-row">'+studioSelect('filterField'+i,'筛选字段',options(fields,f.field))+studioSelect('filterValue'+i,'保留值',options(['',...[...new Set(data.rows.map(r=>String(r[f.field]??'')))]],f.value))+'<button data-drop-filter="'+i+'" aria-label="移除筛选条件">移除</button></div>').join('')+'</div><button id="addFilter">添加筛选条件 ＋</button> <label class="inline"><input id="excludeTotals" type="checkbox" '+(draft.excludeTotals!==false?'checked':'')+'> 排除合计 / 小计行</label><p class="meta">同一横轴标签的多条记录按统计方式聚合；平均比例不等于总体比例。最新值取末行有效值，请核对原表顺序。</p></details>'+
     '<p id="builderError" class="source-warning" role="status" tabindex="-1"></p><div class="studio-actions">'+
     '<button class="primary" id="'+({update:'studioUpdate',append:'studioAppend',replace:'studioShow'})[draft.commitMode]+'">'+({update:'更新所选组',append:'添加到对比',replace:state.basket.length?'替换当前图表':'生成主图'})[draft.commitMode]+'</button>'+
@@ -204,38 +219,34 @@ async function mountBuilder(token){
   $('#studioTable').onchange=e=>source(e.target.value);
   $('#studioAuto').onclick=()=>{useMapping(inferred);refresh();};
   $('#studioLayout').onchange=e=>{
-    draft.wide=e.target.value==='matrix';draft.autoOperation=true;draft.vehicleField='';draft.selectedValues=[];draft.hierarchy={};draft.selectionTouched=false;draft.rangeError='';draft.mappingReason='手动映射 · 可随时重新自动识别';
-    if(draft.wide){
-      const g=groups[0];draft.periods=g?.columns||numeric.filter(f=>f!==draft.dimension);draft.periodGroupId=g?.id||'manual';
-      draft.seriesFields=mappingRowLabelFields(t,draft.periods);draft.labelFieldsTouched=false;
-    }else{draft.metrics=inferred.metrics.length?inferred.metrics:[defaults.metric];draft.dimension=inferred.dimension||defaults.dimension;}
-    refresh();
+    draft.readingMode=e.target.value;draft.mappingReason='已手动调整可选指标来源；切换为自动可同时选择行、列指标。';refresh();
   };
   $('#studioDimension')?.addEventListener('change',e=>{draft.dimension=e.target.value;refresh();});
   $('#studioAxisMode').onchange=e=>{draft.axisMode=e.target.value;refresh();};
-  $('#studioPeriodGroup')?.addEventListener('change',e=>{const g=groups.find(g=>g.id===e.target.value);draft.periodGroupId=e.target.value;if(g){draft.periods=[...g.columns];draft.periodGrain=g.grain;draft.labelFieldsTouched=false;draft.seriesFields=mappingRowLabelFields(t,draft.periods);}refresh();});
   const fieldItems=names=>names.map(name=>({value:name,label:name}));
-  if(draft.wide){
-    bindStudioPicker('columnChoices',fieldItems(fields),draft.periods,values=>{draft.periods=fields.filter(f=>values.includes(f));draft.seriesFields=draft.seriesFields.filter(f=>!draft.periods.includes(f));draft.selectedValues=[];draft.selectionTouched=false;draft.periodGroupId='manual';draft.rangeError='';refresh();});
+  bindStudioPicker('metricChoices',metricItems,draft.inputKeys,values=>{draft.inputKeys=values;refresh();});
+  $('#metricChoicesSearch').setAttribute('aria-label','搜索行名或列名');$('#metricChoicesSearch').placeholder='搜索指标、行名或列名…';
+  if(hasRows){
+    bindStudioPicker('columnChoices',fieldItems(fields),draft.periods,values=>{draft.periods=fields.filter(f=>values.includes(f));draft.periodGroupId='manual';draft.rangeError='';refresh();});
     const range=document.createElement('div');range.className='column-range studio-fields compact-fields';
-    range.innerHTML=studioSelect('studioPeriodStart','批量起列',options(fields,draft.periods[0]))+studioSelect('studioPeriodEnd','批量止列',options(fields,draft.periods.at(-1)))+'<button id="studioSelectRange">选中此区间</button>';
+    range.innerHTML=studioSelect('studioPeriodGroup','快捷时间范围','<option value="manual" '+(draft.periodGroupId==='manual'?'selected':'')+'>自选时间或分类</option>'+groupOptions)+studioSelect('studioPeriodStart','起列',options(fields,draft.periods[0]))+studioSelect('studioPeriodEnd','止列',options(fields,draft.periods.at(-1)))+'<button id="studioSelectRange">选中此区间</button>';
     $('#columnChoices').before(range);
+    $('#studioPeriodGroup').onchange=e=>{const g=groups.find(g=>g.id===e.target.value);draft.periodGroupId=e.target.value;if(g){draft.periods=[...g.columns];draft.periodGrain=g.grain;}draft.rangeError='';refresh();};
     $('#studioSelectRange').onclick=()=>{
       const left=fields.indexOf($('#studioPeriodStart').value),right=fields.indexOf($('#studioPeriodEnd').value);
       if(left<0||right<left){draft.rangeError='止列不能位于起列之前。';draft.previewActive=true;updatePreview();return;}
       draft.periods=fields.slice(left,right+1);draft.rangeError='';draft.periodGroupId='manual';refresh();
     };
-    $('#studioRowMode').onchange=e=>{draft.vehicleField=e.target.value==='index'?'__row_index__':'';if(e.target.value==='labels'&&!draft.seriesFields.length){draft.seriesFields=mappingRowLabelFields(t,draft.periods);if(!draft.seriesFields.length)draft.seriesFields=fields.filter(f=>!draft.periods.includes(f)).slice(0,1);}draft.selectedValues=[];draft.selectionTouched=false;refresh();};
-    if(draft.vehicleField!=='__row_index__')bindStudioPicker('labelChoices',fieldItems(fields.filter(f=>!draft.periods.includes(f))),draft.seriesFields,values=>{draft.seriesFields=fields.filter(f=>values.includes(f));draft.labelFieldsTouched=true;draft.vehicleField='';draft.selectedValues=[];draft.hierarchy={};draft.selectionTouched=false;refresh();});
-  }else{
-    if(draft.operation!=='总体比例')bindStudioPicker('metricChoices',t.fields.map(f=>({value:f.name,label:f.name+(f.type==='number'?'':'（默认计数）')})),draft.metrics,values=>{draft.metrics=fields.filter(f=>values.includes(f));draft.metric=draft.metrics[0]||'';draft.previewActive=true;updatePreview();});
-    $('#studioSplit').onchange=e=>{draft.vehicleField=e.target.value;draft.selectedValues=[];draft.selectionTouched=false;refresh();};
   }
-  hierarchy.levels.forEach((l,i)=>$('#hierarchy'+i).onchange=e=>{draft.hierarchy[l.field]=e.target.value;for(const next of hierarchy.levels.slice(i+1))delete draft.hierarchy[next.field];draft.selectedValues=[];draft.selectionTouched=false;refresh();});
+  $('#studioRowMode').onchange=e=>{draft.rowMode=e.target.value;draft.seriesFields=[...catalog.rowFields];delete draft.legacyRowSelection;refresh();};
+  bindStudioPicker('labelChoices',fieldItems(fields.filter(f=>!draft.periods.includes(f))),catalog.rowFields,values=>{draft.seriesFields=fields.filter(f=>values.includes(f));draft.labelFieldsTouched=true;draft.rowMode='labels';delete draft.legacyRowSelection;refresh();});
+  $('#studioSplit')?.addEventListener('change',e=>{draft.splitField=e.target.value;draft.splitValues=[];draft.splitSelectionTouched=false;refresh();});
+  hierarchy.levels.forEach((level,i)=>$('#hierarchy'+i).onchange=e=>{draft.hierarchy[level.field]=e.target.value;for(const next of hierarchy.levels.slice(i+1))delete draft.hierarchy[next.field];refresh();});
   $('.hierarchy-disclosure')?.addEventListener('toggle',e=>draft.hierarchyOpen=e.target.open);
-  if(draft.vehicleField)bindStudioPicker('seriesChoices',candidates.map(value=>({value,label:seriesValueLabel(value,draft)})),draft.selectedValues,values=>{draft.selectedValues=values;draft.selectionTouched=true;draft.previewActive=true;updatePreview();});
+  if(hasColumns&&draft.splitField)bindStudioPicker('seriesChoices',[...new Set([...splitCandidates,...draft.splitValues])].map(value=>({value,label:value+(splitCandidates.includes(value)?'':'（当前筛选下不可用）')})),draft.splitValues,values=>{draft.splitValues=values;draft.splitSelectionTouched=true;draft.previewActive=true;updatePreview();});
   $('.builder-more').ontoggle=e=>draft.advancedOpen=e.target.open;
-  $('#studioOperation').onchange=e=>{draft.autoOperation=e.target.value==='__auto__';if(!draft.autoOperation)draft.operation=e.target.value;refresh();};
+  $('.row-recognition').ontoggle=e=>draft.rowRecognitionOpen=e.target.open;
+  $('#studioOperation').onchange=e=>{draft.autoOperation=e.target.value==='__auto__';draft.operation=draft.autoOperation?defaults.operation:e.target.value;refresh();};
   $('#studioAxisOrder').onchange=e=>{draft.axisOrder=e.target.value;refresh();};
   // Capture every keystroke immediately; only the expensive redraw is debounced.
   let labelPreviewTimer;
@@ -250,12 +261,12 @@ async function mountBuilder(token){
   $('#studioCancel').onclick=()=>{delete draft.editUid;draft.previewActive=false;state.chartPreview=null;drawComparison();mountBuilder(token);toast('预览已取消，已应用图表未改动。');};
   const validatedSpecs=()=>{
     if(draft.filters.some(f=>f.field&&!fields.includes(f.field)))throw Error('筛选字段已更新或移除，请在高级设置中重新选择；原筛选尚未删除。');
-    if(draft.vehicleField&&draft.selectedValues.some(value=>!candidates.includes(value)))throw Error('部分已选系列在当前数据或筛选下不存在，请重新勾选；系统未自动替换。');
-    const specs=draftSeriesSpecs(draft,t);if(draft.axisMode==='time')specs.forEach(s=>aggregateRows(data,s));return specs;
+    const specs=unifiedChartSpecs(draft,t,catalog);if(draft.axisMode==='time')specs.forEach(s=>aggregateRows(data,s));return specs;
   };
   function updatePreview(){
     let specs=[];try{specs=validatedSpecs();$('#builderError').textContent=seriesWarning(specs);}catch(e){$('#builderError').textContent=e.message;}
-    $('#mappingSummary').textContent=(draft.wide?'X：'+draft.periods.length+' 个列表头 → Y：所选行的单元格数值':'X：'+draft.dimension+' → Y：'+(draft.operation==='总体比例'?'总体比例':draft.metrics.slice(0,2).join('、')+(draft.metrics.length>2?' 等 '+draft.metrics.length+' 个指标':'')))+' · 生成 '+specs.length+' 条系列'+(specs.length>20?'；系列较多，可用图例隐藏不关注项或缩小筛选范围。':'。');
+    $('#mappingSummary').textContent=specs.length?'将生成 '+specs.length+' 条系列'+(specs.length>20?'；系列较多，可用图例隐藏不关注项或缩小筛选范围。':'。'):'';
+    $('#mappingPreview').innerHTML=specs.slice(0,3).map(spec=>{const map=aggregateRows(data,spec),keys=spec.axisOrder==='source'?[...map.keys()]:orderedTemporalKeys([map],spec.axisOrder==='time');return '<div><strong>'+esc(spec.label)+'</strong><span>'+keys.slice(0,3).map(key=>esc(key)+' → '+esc(chartValue(map.get(key),percentageSeries(spec)))).join(' · ')+(keys.length>3?' …':'')+(keys.length?'':'暂无符合条件的数值')+'</span></div>';}).join('');
     for(const id of ['studioShow','studioUpdate','studioAppend'])if($('#'+id))$('#'+id).disabled=!specs.length;
     for(const id of ['studioPeriodStart','studioPeriodEnd'])if($('#'+id)){$('#'+id).setAttribute('aria-invalid',String(!!draft.rangeError));$('#'+id).setAttribute('aria-describedby','builderError');}
     if(draft.previewActive){state.chartPreview=[];if(specs.length){try{state.chartPreview=previewChartSeries(state.basket,specs,draft.commitMode,draft.editUid);}catch(e){$('#builderError').textContent=e.message;for(const id of ['studioShow','studioUpdate','studioAppend'])if($('#'+id))$('#'+id).disabled=true;}}drawComparison();}
@@ -278,7 +289,8 @@ async function refreshStudioRecommendations(token,specs,table,data){
   if(isTime&&temporalAxisSignature([...map.keys()]).startsWith('mixed:'))return;
   cards.push({title:isTime?'时间趋势':'分类对比',reason:(isTime?'保留全部时间点及缺失值 · ':'按当前维度比较数值 · ')+base.label,spec:base,type:isTime?'line':'bar',map});
   const sameMeasure=new Set(specs.map(s=>[s.businessMetric,s.operation,percentageSeries(s)].join('|'))).size===1;
-  if(base.wide&&isTime&&specs.length>1&&sameMeasure){
+  const sameAxis=specs.every(s=>s.wide&&s.axisMode!=='category'&&temporalAxisSignature([...aggregateRows(data,s).keys()])===temporalAxisSignature([...map.keys()]));
+  if(base.wide&&isTime&&specs.length>1&&sameMeasure&&sameAxis){
     const latest=base.axisOrder==='source'?base.periods.at(-1):orderedTemporalKeys([map]).at(-1),rank=new Map(specs.map(s=>[seriesValueLabel(s.vehicleValue,s),aggregateRows(data,s).get(chartAxisKey(latest,base))??null]));
     cards.push({title:'末期分类排名',reason:latest+' · 比较已选系列，不跨月相加',map:rank,type:'bar'});
   }else if(!isTime&&map.size>1)cards.push({title:'TOP 排名',reason:'同一指标降序，最多显示 8 项',map:new Map([...map].sort((a,b)=>(b[1]??-Infinity)-(a[1]??-Infinity)).slice(0,8)),type:'bar'});
