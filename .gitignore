@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/
+output_file/*.db
+output_file/*.db-journal
+
+# Local business files and generated outputs stay on each computer.
+input_file/
+output_file/
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+*.db
+*.log
+*.zip
+.env
+.env.*
+*.pem
+*.key
+.venv/
+venv/
+node_modules/

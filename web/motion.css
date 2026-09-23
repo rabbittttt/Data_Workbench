@@ -1,0 +1,40 @@
+/* Short, interruptible control feedback. Data canvases never animate here. */
+:root{
+  --motion-press:90ms;
+  --motion-color:120ms;
+  --motion-disclosure:140ms;
+  --motion-ease:cubic-bezier(.2,.8,.2,1);
+}
+button{
+  transition:background-color var(--motion-color) ease-out,
+    border-color var(--motion-color) ease-out,
+    color var(--motion-color) ease-out,
+    translate var(--motion-press) ease-out;
+}
+button:active:not(:disabled){translate:0 1px}
+.series-choices label{
+  transition:background-color var(--motion-color) ease-out,
+    border-color var(--motion-color) ease-out;
+}
+.studio-builder>summary,.mapping-picker>summary,.applied-series-manager>summary,
+.hierarchy-disclosure>summary,.builder-more>summary,.numeric-details>summary{
+  transition:background-color var(--motion-color) ease-out,color var(--motion-color) ease-out;
+}
+.studio-builder>summary::before,.mapping-picker>summary::before,.applied-series-manager>summary::before,
+.hierarchy-disclosure>summary::before,.builder-more>summary::before,.numeric-details>summary::before{
+  transition:transform var(--motion-disclosure) var(--motion-ease),color var(--motion-color) ease-out;
+}
+/* Insert beside visible loading text; this decorative span needs aria-hidden=true. */
+.ui-busy-indicator{
+  display:inline-block;width:.85em;height:.85em;flex:0 0 .85em;
+  margin-inline-end:.4em;vertical-align:-.05em;
+  border:2px solid currentColor;border-inline-start-color:transparent;border-radius:50%;
+  animation:ui-busy-turn 900ms linear infinite;
+}
+.ui-busy-indicator[hidden]{display:none}
+@keyframes ui-busy-turn{to{transform:rotate(1turn)}}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  button:active:not(:disabled){translate:none}
+  .ui-busy-indicator{animation:none!important;border-inline-start-color:currentColor;opacity:.65}
+}

@@ -1,0 +1,13 @@
+const fs=require('node:fs');
+const vm=require('node:vm');
+const assert=require('node:assert/strict');
+const source=fs.readFileSync('web/studio.js','utf8');
+const context=vm.createContext({});
+vm.runInContext(source.slice(source.indexOf('function regionBounds'),source.indexOf('async function inspectRegion')),context);
+assert.equal(JSON.stringify(context.regionBounds({range_ref:'B12:AD95'})),JSON.stringify({left:2,top:12,right:30,bottom:95}));
+assert.equal(context.regionBounds(undefined),null);
+assert.equal(context.regionBounds({range_ref:'invalid'}),null);
+assert.ok(source.includes('raw.rows.slice(0,bounds.bottom-raw.start+1).map(row=>row.slice(0,bounds.right-raw.column+1))'));
+assert.ok(source.includes("original.regionId=$('#sourceRegion').value;original.start=original.column=1;$('#regionInspector')?.remove();load();"));
+assert.ok(source.includes('整个 Sheet（原始表格）'));
+console.log('Raw region bounds and selection wiring: checks passed');

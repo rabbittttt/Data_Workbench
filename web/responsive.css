@@ -1,0 +1,2 @@
+.mobile-source{display:none}
+@media(max-width:760px){.mobile-source{display:inline-block}.search{min-width:0}.search input{width:100%}nav{flex-wrap:wrap;overflow:visible}nav button{padding:7px 10px}}
