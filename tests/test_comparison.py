@@ -3,6 +3,7 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import pandas as pd
+from datetime import datetime
 from comparison import aggregate, numbers
 from excel_parser import ParsedTable, _make_headers
 from warehouse import Warehouse
@@ -52,3 +53,23 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 store._replace_file(path, [bad], '2')
             self.assertEqual(store.load(store.catalog().iloc[0].id)['b'].iloc[0], 100)
+
+    def test_imports_in_the_same_second_have_distinct_catalog_versions(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'input.xlsx'
+            store = Warehouse(Path(directory) / 'test.db')
+            table = ParsedTable(path, 'S', 'T', 'A1:B2', pd.DataFrame({'a':['M8'], 'b':[100]}), 1)
+            ticks = iter([datetime(2026, 9, 28, 12, 0, 0, 123001), datetime(2026, 9, 28, 12, 0, 0, 123999)])
+            class ImportClock(datetime):
+                @classmethod
+                def now(cls):
+                    return next(ticks)
+            with patch('warehouse.datetime', ImportClock):
+                store._replace_file(path, [table], 'v1')
+                first = store.catalog().iloc[0].scanned_at
+                table.dataframe.loc[0, 'b'] = 200
+                store._replace_file(path, [table], 'v2')
+                second = store.catalog().iloc[0].scanned_at
+            self.assertNotEqual(first, second)
+            self.assertEqual(first[:19], second[:19])
+            self.assertEqual(store.load(store.catalog().iloc[0].id)['b'].iloc[0], 200)

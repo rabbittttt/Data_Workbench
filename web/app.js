@@ -44,16 +44,17 @@ function installCatalog(result){
   const stamp=catalogStamp(result),changed=stamp!==lastStamp;
   state.tables=result.tables;state.files=result.files||[];state.config=result.config;
   if(changed){state.cache.clear();state.catalogVersion=(state.catalogVersion||0)+1;}
-  lastStamp=stamp;state.pendingCatalog=null;state.catalogPending=false;catalogStatus(result);
+  lastStamp=stamp;state.pendingCatalog=null;state.pendingCatalogPage=null;state.catalogPending=false;catalogStatus(result);
   return changed;
 }
 async function refreshCatalog({force=false}={}){
   const result=await api('catalog'),changed=catalogStamp(result)!==lastStamp;
-  const protectedInput=!!$('#dialog')?.open||(typeof draft!=='undefined'&&!!draft.previewActive);
-  if(changed&&lastStamp&&!force&&(state.catalogPending||protectedInput)){
-    state.pendingCatalog=result;state.catalogPending=true;catalogStatus(result);return false;
+  const protectedInput=!!$('#dialog')?.open||(state.page==='compare'&&typeof draft!=='undefined'&&!!draft.previewActive);
+  const pendingOnPage=state.catalogPending&&state.pendingCatalogPage===state.page;
+  if(changed&&lastStamp&&!force&&(pendingOnPage||protectedInput)){
+    state.pendingCatalog=result;state.pendingCatalogPage=state.page;state.catalogPending=true;catalogStatus(result);return false;
   }
-  if(!changed&&state.catalogPending){state.pendingCatalog=null;state.catalogPending=false;}
+  if(!changed&&state.catalogPending){state.pendingCatalog=null;state.pendingCatalogPage=null;state.catalogPending=false;}
   return installCatalog(result);
 }
 function applyPendingCatalog(){

@@ -43,6 +43,34 @@ test('unchanged polling never clears cached rows and explicit correction can for
   c.draft.previewActive=true;setResult(next('v2'));
   assert.equal(await c.refreshCatalog({force:true}),true);assert.equal(c.state.catalogPending,false);assert.equal(c.state.tables[0].scanned_at,'v2');
 });
+test('an inactive chart draft cannot block original-sheet refresh',async()=>{
+  const {c,setResult,next}=catalogContext();await c.refreshCatalog();
+  c.draft={id:'A',previewActive:true,selectedValues:['M9'],filters:[{field:'区域',value:'华东'}]};
+  const before=plain(c.draft);c.state.page='explore';
+  setResult(next('v2'));assert.equal(await c.refreshCatalog(),true);
+  assert.equal(c.state.tables[0].scanned_at,'v2');assert.equal(c.state.catalogPending,false);
+  assert.deepEqual(c.draft,before,'background refresh does not discard the inactive draft');
+});
+test('leaving the protected page consumes current data without a sticky pending notice',async()=>{
+  const {c,setResult,next}=catalogContext();await c.refreshCatalog();
+  c.draft={id:'A',previewActive:true,selectedValues:['M9']};const before=plain(c.draft);
+  setResult(next('v2'));assert.equal(await c.refreshCatalog(),false);
+  assert.equal(c.state.pendingCatalogPage,'compare');
+  c.state.page='explore';assert.equal(await c.refreshCatalog(),true);
+  assert.equal(c.state.tables[0].scanned_at,'v2');assert.equal(c.state.pendingCatalog,null);
+  assert.equal(c.state.pendingCatalogPage,null);assert.deepEqual(c.draft,before);
+});
+test('raw file changes refresh original data before import, then imported changes invalidate rows',async()=>{
+  const {c,setResult,initial}=catalogContext();
+  c.state.page='explore';
+  const version={...initial,files:[{id:'source',signature:'v1'}]};setResult(version);await c.refreshCatalog();
+  c.state.cache.set('A',{rows:[{value:'old'}]});
+  setResult({...version,files:[{id:'source',signature:'v2'}]});
+  assert.equal(await c.refreshCatalog(),true);assert.equal(c.state.cache.size,0);
+  c.state.cache.set('A',{rows:[{value:'previous import'}]});
+  setResult({...version,files:[{id:'source',signature:'v2'}],tables:[{id:'A',scanned_at:'v2',archived:false}]});
+  assert.equal(await c.refreshCatalog(),true);assert.equal(c.state.cache.size,0);
+});
 test('late responses from an old catalog cannot poison the new cache',async()=>{
   let resolveOld,count=0;
   const c=vm.createContext({state:{cache:new Map(),catalogVersion:1},api:async()=>++count===1?new Promise(resolve=>resolveOld=resolve):{rows:[{value:'new'}]}});

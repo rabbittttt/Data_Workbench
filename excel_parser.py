@@ -159,7 +159,7 @@ def _table_title(rows: list[list[Any]], header_index: int, fallback: str) -> str
     return fallback
 
 
-def discover_tables(path: str | Path, rules=None) -> list[ParsedTable]:
+def discover_tables(path: str | Path, rules=None, notices=None) -> list[ParsedTable]:
     file_path = Path(path).resolve()
     workbook = load_workbook(file_path, data_only=True, read_only=False)
     discovered: list[ParsedTable] = []
@@ -218,6 +218,14 @@ def discover_tables(path: str | Path, rules=None) -> list[ParsedTable]:
         book = load_workbook(file_path, read_only=False, data_only=True)
         try:
             for rule in relevant:
+                if rule['sheet'] not in book.sheetnames:
+                    message = f"手动识别规则的工作表“{rule['sheet']}”已不存在，已跳过该规则并识别当前工作表"
+                    if notices is not None:
+                        notices.append(message)
+                    else:
+                        import warnings
+                        warnings.warn(message, UserWarning, stacklevel=2)
+                    continue
                 left, top, right, bottom = range_boundaries(rule['range'])
                 sheet = book[rule['sheet']]
                 if bottom > sheet.max_row or right > sheet.max_column:

@@ -79,13 +79,15 @@ class Warehouse:
                     previous = connection.execute('SELECT signature FROM file_versions WHERE path=?', (str(file_path),)).fetchone()
                 if not force and previous and previous[0] == signature:
                     continue
-                tables = discover_tables(file_path)
+                notices = []
+                tables = discover_tables(file_path, notices=notices)
                 after = file_path.stat()
                 if signature != f"{after.st_mtime_ns}:{after.st_size}:{PARSER_VERSION}":
                     raise ValueError('文件正在保存，下次刷新重试')
                 if not tables:
                     raise ValueError('未发现可识别表格，保留上次导入数据')
                 self._replace_file(file_path, tables, signature)
+                errors.extend(f"{file_path.name}: {notice}" for notice in notices)
             except Exception as exc:  # one damaged workbook must not stop the scan
                 errors.append(f"{file_path.name}: {exc}")
         catalog = self.catalog()
@@ -98,7 +100,8 @@ class Warehouse:
             for sql_table in old_tables:
                 connection.execute(f'DROP TABLE IF EXISTS "{sql_table}"')
             connection.execute("DELETE FROM datasets WHERE file_path=?", (str(file_path),))
-            now = datetime.now().isoformat(timespec="seconds")
+            # Keep successive imports distinct even when a file is saved twice in one second.
+            now = datetime.now().isoformat(timespec="microseconds")
             for table in tables:
                 dataset_id, sql_table = self._identity(table)
                 frame = table.dataframe.copy()

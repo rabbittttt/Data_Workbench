@@ -20,6 +20,7 @@ vm.runInContext(helpers,c);
   c.draft={sourcePath:file.path,sourceSheet:'小转大进度'};
   source=await c.chartSourceContext();assert.equal(source.missing,true);assert.match(c.chartSourceMarkup(source,''),/旧图表未改动/);
   file.signature='v2';await c.chartSourceContext();assert.equal(calls,2,'changed workbook refreshes directory');
+  assert.equal(vm.runInContext('workbookDirectoryCache.size',c),1,'old directory versions are released');
   file.signature='v3';fail=true;source=await c.chartSourceContext();assert.match(source.error,/文件正在写入/);assert.equal(source.missing,false,'read failure is not confused with a deleted sheet');
   fail=false;await c.chartSourceContext();assert.equal(calls,4,'failed reads are retryable, not cached');
   const historical={id:'old',file_path:'removed.xlsx',sheet_name:'旧表',table_name:'旧区域'};

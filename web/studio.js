@@ -151,7 +151,11 @@ async function chartSourceContext(t){
     const key=file.id+'|'+file.signature;
     try{
       let info=workbookDirectoryCache.get(key);
-      if(!info){info=await api('workbook?id='+encodeURIComponent(file.id));workbookDirectoryCache.set(key,info);}
+      if(!info){
+        info=await api('workbook?id='+encodeURIComponent(file.id));
+        for(const oldKey of workbookDirectoryCache.keys())if(oldKey.startsWith(file.id+'|'))workbookDirectoryCache.delete(oldKey);
+        workbookDirectoryCache.set(key,info);
+      }
       sheets=info.sheets;
     }catch(e){error='无法核对当前工作表目录：'+e.message;}
   }else sheets=[...new Set(state.tables.filter(x=>x.file_path===path).map(x=>x.sheet_name))];

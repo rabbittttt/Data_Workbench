@@ -34,3 +34,23 @@ class RecognitionTest(unittest.TestCase):
             rules = {'test': {'file': str(path), 'sheet': book.active.title, 'range': 'A1:D80', 'name': '无效'}}
             with self.assertRaises(ValueError):
                 discover_tables(path, rules=rules)
+
+    def test_deleted_sheet_rule_does_not_block_current_workbook(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'sample.xlsx'
+            book = Workbook()
+            book.active.title = '当前订单'
+            book.active.append(['车型', '销量'])
+            book.active.append(['M8', 999])
+            book.active.append(['M9', 200])
+            book.save(path)
+            before = path.read_bytes()
+            rules = {'old': {'file': str(path), 'sheet': '已删除订单', 'range': 'A1:B3', 'name': '旧规则'}}
+            notices = []
+            tables = discover_tables(path, rules=rules, notices=notices)
+            self.assertEqual({t.sheet_name for t in tables}, {'当前订单'})
+            self.assertEqual(tables[0].dataframe['销量'].iloc[0], 999)
+            self.assertEqual(len(notices), 1)
+            self.assertIn('已删除订单', notices[0])
+            self.assertEqual(rules['old']['sheet'], '已删除订单', 'stale rules are retained, not deleted')
+            self.assertEqual(path.read_bytes(), before)
