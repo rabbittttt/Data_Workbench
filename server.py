@@ -67,11 +67,38 @@ def workbook_files():
             and not p.name.startswith('~$') and p.resolve().is_relative_to(folder)}
 
 
+def workbook_list():
+    folder = Path(config()['folder']).resolve()
+    files = []
+    for key, path in sorted(workbook_files().items(), key=lambda item: str(item[1])):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        files.append(dict(id=key, name=str(path.relative_to(folder)), path=str(path),
+                          signature=f'{stat.st_mtime_ns}:{stat.st_size}'))
+    return files
+
+
+def workbook_info(path):
+    book = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return {'sheets': [sheet.title for sheet in book.worksheets]}
+    finally:
+        book.close()
+
+
 def original_sheet(path, sheet_name=None, start=1, column=1):
     """Read source cells independently of inferred tables. Never save the workbook."""
     book = load_workbook(path, data_only=True)
     try:
-        sheet = book[sheet_name] if sheet_name else book.worksheets[0]
+        sheets = [sheet.title for sheet in book.worksheets]
+        missing_sheet = sheet_name if sheet_name and sheet_name not in sheets else None
+        if not sheets:
+            raise ValueError('此文件没有可读取的单元格工作表')
+        sheet = book[sheet_name] if sheet_name and not missing_sheet else book.worksheets[0]
+        if missing_sheet:
+            start = column = 1
         start = min(max(1, start), sheet.max_row)
         column = min(max(1, column), sheet.max_column)
         bottom, right = min(start+79, sheet.max_row), min(column+29, sheet.max_column)
@@ -79,8 +106,10 @@ def original_sheet(path, sheet_name=None, start=1, column=1):
             min_row=start, max_row=bottom, min_col=column, max_col=right)]
         merges = [list(r.bounds) for r in sheet.merged_cells.ranges
                   if r.min_row <= bottom and r.max_row >= start and r.min_col <= right and r.max_col >= column]
-        return dict(sheets=book.sheetnames, sheet=sheet.title, rows=rows, merges=merges,
-                    start=start, column=column, max_row=sheet.max_row, max_col=sheet.max_column)
+        return dict(sheets=sheets, sheet=sheet.title, rows=rows, merges=merges,
+                    start=start, column=column, max_row=sheet.max_row, max_col=sheet.max_column,
+                    missing_sheet=missing_sheet,
+                    warning=f'原工作表“{missing_sheet}”已不存在，已显示“{sheet.title}”。请重新选择当前工作表；旧图表未改动。' if missing_sheet else '')
     finally:
         book.close()
 
@@ -91,25 +120,32 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_json(self, payload, code=200):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # The client is gone; do not send another response on this socket.
+            self.close_connection = True
 
     def do_GET(self):
         parts = urlparse(self.path)
         query = parse_qs(parts.query)
         try:
             if parts.path == '/api/catalog':
-                return self.send_json({'tables': catalog(), 'status': STATUS, 'config': config()})
+                return self.send_json({'tables': catalog(), 'files': workbook_list(), 'status': STATUS, 'config': config()})
             if parts.path == '/api/table':
                 return self.send_json(data(query['id'][0]))
             if parts.path == '/api/workbooks':
-                folder = Path(config()['folder']).resolve()
-                return self.send_json({'files': [{'id': key, 'name': str(path.relative_to(folder)), 'path': str(path)}
-                                                for key, path in sorted(workbook_files().items(), key=lambda item: str(item[1]))]})
+                return self.send_json({'files': workbook_list()})
+            if parts.path == '/api/workbook':
+                path = workbook_files().get(query['id'][0])
+                if path is None:
+                    raise ValueError('文件已移走，请重新选择数据文件')
+                return self.send_json(workbook_info(path))
             if parts.path == '/api/sheet':
                 path = workbook_files().get(query['id'][0])
                 if path is None:

@@ -32,7 +32,7 @@ function empty(title,subtitle,button=''){return `<div class="panel empty"><h2>${
 function grid(rows,columns){return `<div class="tablewrap"><table><thead><tr>${columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${columns.map(c=>`<td class="${typeof row[c]==='number'?'num':''}" title="${esc(fmt(row[c]))}">${esc(fmt(row[c]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;}
 function exportCSV(rows,columns,name){const cell=value=>'"'+String(value??'').replace(/"/g,'""').replace(/^([=+@])/,'\t$1')+'"';const text='\ufeff'+[columns,...rows.map(r=>columns.map(c=>r[c]))].map(r=>r.map(cell).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function persistBasket(){try{localStorage.setItem('shujian-basket',JSON.stringify(state.basket));}catch{}$('#basketCount').textContent=state.basket.length;}
-function catalogStamp(result){return JSON.stringify(result.tables.map(t=>[t.id,t.scanned_at]));}
+function catalogStamp(result){return JSON.stringify([result.tables.map(t=>[t.id,t.scanned_at]),(result.files||[]).map(f=>[f.id,f.signature])]);}
 function catalogStatus(result){
   state.status=result.status;
   $('#tableCount').textContent=activeTables().length;
@@ -42,7 +42,7 @@ function catalogStatus(result){
 }
 function installCatalog(result){
   const stamp=catalogStamp(result),changed=stamp!==lastStamp;
-  state.tables=result.tables;state.config=result.config;
+  state.tables=result.tables;state.files=result.files||[];state.config=result.config;
   if(changed){state.cache.clear();state.catalogVersion=(state.catalogVersion||0)+1;}
   lastStamp=stamp;state.pendingCatalog=null;state.catalogPending=false;catalogStatus(result);
   return changed;

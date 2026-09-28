@@ -102,7 +102,10 @@ async function chartStudio(token){
   const layout=$('#main .split');layout.className='studio-layout';layout.firstElementChild.remove();
   const settingsCard=document.createElement('section');settingsCard.className='panel studio-settings-card';settingsCard.setAttribute('aria-label','图表设置');
   const seriesToolbar=document.createElement('div');seriesToolbar.className='series-toolbar';seriesToolbar.innerHTML='<div>'+(state.chartUndo?'<button id="undoChartChange">撤销上次图表改动</button> ':'')+'<button id="studioNew">新建图表 / 对比 ＋</button><button id="studioRaw">查看原始表格</button></div>';settingsCard.append(seriesToolbar);
-  seriesToolbar.querySelector('#studioRaw').onclick=()=>openOriginal(draft.id||state.basket[0]?.id);
+  seriesToolbar.querySelector('#studioRaw').onclick=()=>{
+    if(!draft.id&&draft.sourcePath){Object.assign(original,{path:draft.sourcePath,sheet:draft.sourceSheet||'',regionId:'',start:1,column:1});return go('raw');}
+    openOriginal(draft.id||state.basket[0]?.id);
+  };
   const manager=document.createElement('details');manager.className='applied-series-manager';manager.open=!!state.seriesManagerOpen;
   manager.innerHTML='<summary>管理已应用系列 <span class="meta">编辑 / 移除 · '+state.basket.length+' 条</span></summary>';
   manager.ontoggle=()=>{state.seriesManagerOpen=manager.open;};
@@ -130,9 +133,51 @@ async function chartStudio(token){
   const swap=document.createElement('button');swap.id='swapAxes';swap.textContent=state.axisSwapped?'恢复默认方向':'切换 X / Y';$('#saveView').before(swap);
   swap.onclick=()=>{state.axisSwapped=!state.axisSwapped;swap.textContent=state.axisSwapped?'恢复默认方向':'切换 X / Y';drawComparison();};
   const numericPanel=$('#compareGrid').closest('.panel'),fold=document.createElement('details');fold.className='numeric-details';fold.innerHTML='<summary>查看数值明细、差值与导出</summary>';numericPanel.before(fold);fold.append(numericPanel);
-  if(!draft.id){resetChartDraft(state.basket[0]?.id||recommend()[0]?.id||activeTables()[0]?.id);draft.previewActive=!state.basket.length;}
+  if(!draft.id&&!draft.sourcePath){resetChartDraft(state.basket[0]?.id||recommend()[0]?.id||activeTables()[0]?.id);draft.previewActive=!state.basket.length;}
   await mountBuilder(token);if(token!==renderToken)return;state.charts.forEach(c=>c.resize());
   if(typeof uiFeedback==='function')uiFeedback($('#chartStage'),'status');
+}
+const workbookDirectoryCache=new Map();
+function chartSourceFiles(){
+  const files=(state.files||[]).map(f=>({...f,file_path:f.path,relative_path:f.name}));
+  for(const t of state.tables)if(!files.some(f=>f.file_path===t.file_path))files.push({...t,archived:true});
+  return files;
+}
+async function chartSourceContext(t){
+  const files=chartSourceFiles(),path=draft.sourcePath||t?.file_path||files[0]?.file_path;
+  const file=files.find(f=>f.file_path===path);
+  let sheets=[],error='';
+  if(file?.id&&!file.archived){
+    const key=file.id+'|'+file.signature;
+    try{
+      let info=workbookDirectoryCache.get(key);
+      if(!info){info=await api('workbook?id='+encodeURIComponent(file.id));workbookDirectoryCache.set(key,info);}
+      sheets=info.sheets;
+    }catch(e){error='无法核对当前工作表目录：'+e.message;}
+  }else sheets=[...new Set(state.tables.filter(x=>x.file_path===path).map(x=>x.sheet_name))];
+  const sheet=draft.sourceSheet||t?.sheet_name||sheets[0]||'';
+  const regions=state.tables.filter(x=>x.file_path===path&&x.sheet_name===sheet);
+  const missing=!error&&!file?.archived&&!!sheet&&!sheets.includes(sheet);
+  return {files,path,sheet,sheets,regions,error,missing};
+}
+function chartSourceMarkup(source,id){
+  return '<div class="studio-fields compact-fields">'+
+    studioSelect('studioFile','文件',source.files.map(f=>'<option value="'+esc(f.file_path)+'" '+(f.file_path===source.path?'selected':'')+'>'+esc(f.relative_path||f.file_name)+(f.archived?'（历史来源）':'')+'</option>').join(''))+
+    studioSelect('studioSheet','工作表 / Sheet',options(source.sheets,source.sheet))+
+    studioSelect('studioTable','数据区域（自动识别）',source.regions.length?source.regions.map(r=>'<option value="'+esc(r.id)+'" '+(r.id===id?'selected':'')+'>'+esc(r.table_name+' · '+r.range_ref)+'</option>').join(''):'<option value="">暂无已导入区域</option>')+'</div>'+
+    (source.error||source.missing?'<p class="source-warning" role="alert">'+esc(source.error||'当前文件中已不存在“'+source.sheet+'”。旧图表未改动，请选择实际工作表，并同步更新数据。')+'</p>':'');
+}
+function bindChartSources(source,token){
+  const select=(path,sheet,id)=>{
+    const editUid=draft.editUid,commitMode=draft.commitMode;
+    resetChartDraft(id||'');Object.assign(draft,{sourcePath:path,sourceSheet:sheet,editUid,commitMode});
+    refreshStudioRecommendations(token,[],null,null);
+    state.chartPreview=null;drawComparison();return mountBuilder(token);
+  };
+  $('#studioFile').onchange=e=>select(e.target.value,'','');
+  $('#studioSheet').onchange=e=>select(source.path,e.target.value,'');
+  $('#studioTable').onchange=e=>select(source.path,source.sheet,e.target.value);
+  $('#studioTable').disabled=!source.regions.length||source.missing;
 }
 async function mountBuilder(token){
   const version=++builderVersion,root=$('#studioBuilder');
@@ -140,8 +185,29 @@ async function mountBuilder(token){
   if(!root.querySelector('.builder-loading')){const loading=document.createElement('p');loading.className='builder-loading';loading.setAttribute('role','status');loading.innerHTML='<span class="ui-busy-indicator" aria-hidden="true"></span> 正在读取数据和核对字段…';root.prepend(loading);}
   let t=tableById(draft.id);
   if(!t&&draft.id){root.innerHTML='<p class="source-warning" role="alert">原数据区域已不可用，已保留草稿，未改选其他表格。</p><button id="reselectChartSource">重新选择数据</button>';root.removeAttribute('aria-busy');$('#reselectChartSource').onclick=()=>{const editUid=draft.editUid,commitMode=draft.commitMode;resetChartDraft(activeTables()[0]?.id||'');draft.editUid=editUid;draft.commitMode=commitMode;mountBuilder(token);};return;}
-  if(!t){t=activeTables()[0];if(t)resetChartDraft(t.id);}
-  if(!t){root.innerHTML='<p>暂无可用数据，请在数据管理中连接文件。</p>';root.removeAttribute('aria-busy');return;}
+  if(!t&&!draft.sourcePath){t=activeTables()[0];if(t)resetChartDraft(t.id);}
+  let source;
+  try{source=await chartSourceContext(t);}catch(e){if(token!==renderToken||version!==builderVersion)return;root.innerHTML='<p class="source-warning" role="alert">'+esc(e.message)+'</p>';root.removeAttribute('aria-busy');return;}
+  if(token!==renderToken||version!==builderVersion)return;
+  if(!t&&!source.missing&&!source.error){t=source.regions[0];if(t)draft.id=t.id;}
+  if(!t||source.missing||source.error){
+    state.chartPreview=null;drawComparison();refreshStudioRecommendations(token,[],null,null);
+    $('#chartStage').textContent='已应用图表已保留 · 当前来源待核对';$('#saveView').disabled=false;
+    root.innerHTML=chartSourceMarkup(source,t?.id)+'<p class="meta" role="status">'+(source.error?'目录读取失败，可查看原表或重试同步。':source.missing?'不会用其他 Sheet 替代当前图表数据。':'此工作表尚无已导入数据区域。同步后重新识别；说明页或空表可能没有可画图的数据。')+'</p><div class="studio-actions"><button id="syncChartSource">同步并重新识别</button><button id="sourceOriginal">查看原始表格</button></div>';
+    root.removeAttribute('aria-busy');bindChartSources(source,token);
+    $('#sourceOriginal').onclick=()=>{Object.assign(original,{path:source.path,sheet:source.sheet,regionId:'',start:1,column:1});go('raw');};
+    $('#syncChartSource').onclick=async()=>{
+      const button=$('#syncChartSource');button.disabled=true;button.textContent='正在同步…';
+      try{
+        await api('sync',{});
+        let result;
+        for(let i=0;i<60;i++){await new Promise(resolve=>setTimeout(resolve,1000));if(token!==renderToken||version!==builderVersion)return;result=await api('catalog');if(!result.status.busy)break;}
+        if(result.status.busy){toast('同步仍在进行，完成后可载入更新');return;}
+        installCatalog(result);await mountBuilder(token);toast(result.status.errors.length?'同步完成，部分文件需检查':'已同步并核对当前工作表');
+      }catch(e){toast('同步失败：'+e.message);}finally{if(button.isConnected){button.disabled=false;button.textContent='同步并重新识别';}}
+    };
+    return;
+  }
   let data;try{data=await tableData(t.id);}catch(e){if(token!==renderToken||version!==builderVersion)return;root.innerHTML='<p class="source-warning" role="alert">读取失败：'+esc(e.message)+'</p><button id="retryBuilder">重试读取</button>';root.removeAttribute('aria-busy');$('#retryBuilder').onclick=()=>mountBuilder(token);return;}
   if(token!==renderToken||version!==builderVersion)return;
   const fields=t.fields.map(f=>f.name),groups=periodColumnGroups(t).filter(g=>g.columns.length>=2),defaults=chartDefaults(t);
@@ -177,7 +243,6 @@ async function mountBuilder(token){
   draft.splitField=draft.splitField||'';draft.splitValues=draft.splitValues||[];
   const splitCandidates=draft.splitField?[...new Set(baseRows.map(row=>String(row[draft.splitField]??'')).filter(Boolean))]:[];
   if(!draft.splitSelectionTouched&&draft.splitField&&!draft.splitValues.length&&splitCandidates.length)draft.splitValues=[splitCandidates[0]];
-  const files=[...new Map(state.tables.map(t=>[t.file_path,t])).values()],sheets=[...new Set(state.tables.filter(x=>x.file_path===t.file_path).map(x=>x.sheet_name))],regions=state.tables.filter(x=>x.file_path===t.file_path&&x.sheet_name===t.sheet_name);
   const groupOptions=groups.map(g=>'<option value="'+esc(g.id)+'" '+(draft.periodGroupId===g.id?'selected':'')+'>'+esc(periodGrainLabel(g.grain)+(g.qualifier?' · '+g.qualifier:'')+'（'+g.columns.length+' 列）')+'</option>').join('');
   const numeric=t.fields.filter(f=>f.type==='number').map(f=>f.name);
   const ops=['求和','平均值','最新值','最大值','最小值','有效数值计数','非空计数',...(!hasRows?['总体比例']:[])];
@@ -185,10 +250,7 @@ async function mountBuilder(token){
   if(!draft.commitMode||draft.commitMode==='update'&&!editing)draft.commitMode=editing?'update':state.basket.length?'append':'replace';
   const modes=[...(editing?[['update','更新所选系列']]:[]),...(state.basket.length?[['append','加入已有对比（保留已有）']]:[]),['replace',state.basket.length?'替换当前图表':'生成主图']];
   if(!modes.some(([mode])=>mode===draft.commitMode))draft.commitMode='replace';
-  root.innerHTML='<div class="preview-bar">'+studioSelect('studioIntent','本次操作',modes.map(([mode,label])=>'<option value="'+mode+'" '+(mode===draft.commitMode?'selected':'')+'>'+label+'</option>').join(''))+'<span class="preview-status" id="draftStatus" role="status"></span></div><div class="studio-fields compact-fields">'+
-    studioSelect('studioFile','文件',files.map(f=>'<option value="'+esc(f.file_path)+'" '+(f.file_path===t.file_path?'selected':'')+'>'+esc(f.relative_path||f.file_name)+'</option>').join(''))+
-    studioSelect('studioSheet','工作表 / Sheet',options(sheets,t.sheet_name))+
-    studioSelect('studioTable','数据区域（自动识别）',regions.map(r=>'<option value="'+r.id+'" '+(r.id===t.id?'selected':'')+'>'+esc(r.table_name+' · '+r.range_ref)+'</option>').join(''))+'</div>'+
+  root.innerHTML='<div class="preview-bar">'+studioSelect('studioIntent','本次操作',modes.map(([mode,label])=>'<option value="'+mode+'" '+(mode===draft.commitMode?'selected':'')+'>'+label+'</option>').join(''))+'<span class="preview-status" id="draftStatus" role="status"></span></div>'+chartSourceMarkup(source,t.id)+
     studioPicker('metricChoices','选择指标 / Y 轴',true)+
     (hierarchy.levels.length?'<details class="hierarchy-disclosure" '+(draft.hierarchyOpen?'open':'')+'><summary>按层级筛选行指标 <span class="meta">可选 · '+hierarchy.levels.length+' 个字段</span></summary><div class="studio-fields compact-fields hierarchy-fields">'+hierarchy.levels.map((level,i)=>studioSelect('hierarchy'+i,level.field,'<option value="">全部</option>'+options(level.values,level.value))).join('')+'</div></details>':'')+
     (draft.operation==='总体比例'?'<p class="meta">当前数值使用分子合计 ÷ 分母合计，可在高级设置调整。</p>':'')+
@@ -212,11 +274,8 @@ async function mountBuilder(token){
     '<button id="studioCancel">取消预览</button><button class="link" id="checkRegion">核对原表</button><button class="link" id="fixRegion">修正区域</button><span class="meta">'+t.row_count+' 行 · '+fields.length+' 字段 · '+esc(t.range_ref)+'</span></div>';
   root.removeAttribute('aria-busy');
   const refresh=async()=>{draft.previewActive=true;const focused=document.activeElement?.id;await mountBuilder(token);if(focused)document.getElementById(focused)?.focus({preventScroll:true});};
-  const source=id=>{const editUid=draft.editUid,commitMode=draft.commitMode;resetChartDraft(id);draft.editUid=editUid;draft.commitMode=commitMode;return refresh();};
   $('#studioIntent').onchange=e=>{draft.commitMode=e.target.value;refresh();};
-  $('#studioFile').onchange=e=>source(state.tables.find(x=>x.file_path===e.target.value).id);
-  $('#studioSheet').onchange=e=>source(state.tables.find(x=>x.file_path===t.file_path&&x.sheet_name===e.target.value).id);
-  $('#studioTable').onchange=e=>source(e.target.value);
+  bindChartSources(source,token);
   $('#studioAuto').onclick=()=>{useMapping(inferred);refresh();};
   $('#studioLayout').onchange=e=>{
     draft.readingMode=e.target.value;draft.mappingReason='已手动调整可选指标来源；切换为自动可同时选择行、列指标。';refresh();
@@ -342,10 +401,14 @@ async function rawPage(token){
   let loadVersion=0;
   const load=async()=>{const version=++loadVersion;$('#originalGrid').textContent='正在读取工作表…';try{
     const selected=tableById(original.regionId),filePath=files.find(f=>f.id===original.id)?.path;
-    const bounds=selected&&selected.file_path.toLowerCase()===filePath?.toLowerCase()&&selected.sheet_name===original.sheet?regionBounds(selected):null;
+    let bounds=selected&&selected.file_path.toLowerCase()===filePath?.toLowerCase()&&selected.sheet_name===original.sheet?regionBounds(selected):null;
     if(bounds){original.start=Math.max(bounds.top,Math.min(bounds.bottom,original.start));original.column=Math.max(bounds.left,Math.min(bounds.right,original.column));}
     const raw=await api('sheet?'+new URLSearchParams({id:original.id,...(original.sheet?{sheet:original.sheet}:{}),start:original.start,column:original.column}));
     if(token!==renderToken||version!==loadVersion)return;
+    if(raw.missing_sheet){bounds=null;original.regionId='';}
+    let sourceWarning=$('#originalSourceWarning');
+    if(!sourceWarning){sourceWarning=document.createElement('p');sourceWarning.id='originalSourceWarning';sourceWarning.className='source-warning';sourceWarning.setAttribute('role','status');$('#sheetTabs').before(sourceWarning);}
+    sourceWarning.textContent=raw.warning||'';sourceWarning.hidden=!raw.warning;
     if(bounds)raw.rows=raw.rows.slice(0,bounds.bottom-raw.start+1).map(row=>row.slice(0,bounds.right-raw.column+1));
     Object.assign(original,{sheet:raw.sheet,start:raw.start,column:raw.column});
     state.file=files.find(f=>f.id===original.id)?.path||'';
@@ -370,7 +433,7 @@ async function rawPage(token){
     $('#originalStatus').textContent=`${raw.sheet} · ${bounds?selected.table_name+' · '+selected.range_ref+' · 共 '+(bounds.bottom-bounds.top+1)+' 行 × '+(bounds.right-bounds.left+1)+' 列':'整个 Sheet · 共 '+raw.max_row+' 行 × '+raw.max_col+' 列'} · 当前 ${raw.start}–${endRow} 行 / ${columnLetter(raw.column)}–${columnLetter(endCol)} 列`;
     $('#jumpRow').value=raw.start;$('#jumpColumn').value=raw.column;
     for(const [id,key,delta,disabled] of [['rawLeft','column',-30,raw.column<=(bounds?.left||1)],['rawRight','column',30,endCol>=(bounds?.right||raw.max_col)],['rawUp','start',-80,raw.start<=(bounds?.top||1)],['rawDown','start',80,endRow>=(bounds?.bottom||raw.max_row)]]){const b=$('#'+id);b.disabled=disabled;b.onclick=()=>{original[key]=Math.max(1,original[key]+delta);load();};}
-  }catch(e){if(token===renderToken&&version===loadVersion)$('#originalGrid').textContent='无法读取：'+e.message;}};
+  }catch(e){if(token===renderToken&&version===loadVersion){$('#originalGrid').textContent='无法读取：'+e.message;$('#sheetTabs').innerHTML='';$('#regionTools')?.remove();$('#regionInspector')?.remove();$('#originalSourceWarning')?.remove();$('#originalChart').disabled=true;for(const id of ['rawLeft','rawRight','rawUp','rawDown'])$('#'+id).disabled=true;$('#originalStatus').textContent='读取失败，请重试或重新选择文件';}}};
   $('#originalFile').onchange=e=>{original.id=e.target.value;original.sheet='';original.regionId='';original.start=original.column=1;load();};
   $('#rawJump').onclick=()=>{original.start=Number($('#jumpRow').value)||1;original.column=Number($('#jumpColumn').value)||1;load();};
   $('#originalChart').onclick=()=>{const id=$('#sourceRegion')?.value||$('#sourceRegion option[value]:not([value=""])')?.value;if(id)configureChart(id);};
