@@ -17,6 +17,32 @@ function catalogContext(){
   return {c,$,calls,initial,setResult:result=>current=result,next:version=>({...initial,tables:[{id:'A',scanned_at:version,archived:false}]})};
 }
 
+test('idle catalog checks run every ten minutes with an initial load',async()=>{
+  const $=nodes(),intervals=[];let ready,refreshes=0;
+  const c=vm.createContext({$,state:{basket:[],page:'home'},location:{hash:''},localStorage:{getItem:()=>null},window:{addEventListener:(_event,callback)=>{ready=callback;}},refreshCatalog:async()=>{refreshes++;return true;},persistBasket:()=>{},go:()=>{},pollBusy:false,setInterval:(callback,delay)=>intervals.push({callback,delay}),empty:()=>''});
+  vm.runInContext(app.match(/^const AUTO_REFRESH_INTERVAL=.*$/m)[0]+'\n'+app.slice(app.indexOf("window.addEventListener('DOMContentLoaded',")),c);
+  await ready();assert.equal(refreshes,1);assert.equal(intervals.length,1);assert.equal(intervals[0].delay,600000);
+  await intervals[0].callback();assert.equal(refreshes,2);assert.equal(c.pollBusy,false);
+});
+
+test('requested sync checks completion promptly and stops once it finishes',async()=>{
+  const $=nodes(),timers=new Map(),routes=[];let nextTimer=0,checks=0;
+  const c=vm.createContext({$,state:{page:'explore',status:{busy:false}},syncProgressTimer:null,setTimeout:(callback,delay)=>{timers.set(++nextTimer,{callback,delay});return nextTimer;},clearTimeout:id=>timers.delete(id),refreshCatalog:async()=>{checks++;c.state.status.busy=checks===1;$('#syncButton').disabled=c.state.status.busy;return checks===2;},go:async(page,options)=>routes.push({page,options}),toast:()=>{}});
+  vm.runInContext(snippet('function trackRequestedSync(', 'function go('),c);
+  c.trackRequestedSync();assert.equal($('#syncButton').disabled,true);assert.match($('#syncStatus').textContent,/正在同步/);assert.equal(timers.get(1).delay,1000);
+  const first=timers.get(1);timers.delete(1);await first.callback();assert.equal(timers.get(2).delay,5000);
+  const second=timers.get(2);timers.delete(2);await second.callback();
+  assert.equal(checks,2);assert.equal(timers.size,0);assert.equal(c.syncProgressTimer,null);assert.equal($('#syncButton').disabled,false);
+  assert.deepEqual(plain(routes),[{page:'explore',options:{background:true}}]);
+});
+
+test('sync status errors stop completion checks and allow retry',async()=>{
+  const $=nodes(),messages=[];
+  const c=vm.createContext({$,state:{page:'explore'},syncProgressTimer:1,refreshCatalog:async()=>{throw Error('connection lost');},setTimeout:()=>{throw Error('must not keep polling after failure');},toast:message=>messages.push(message)});
+  $('#syncButton').disabled=true;vm.runInContext(snippet('function trackRequestedSync(', 'function go('),c);
+  await c.refreshSyncProgress();assert.equal(c.syncProgressTimer,null);assert.equal($('#syncButton').disabled,false);assert.match($('#syncStatus').textContent,/请重试/);assert.deepEqual(messages,['connection lost']);
+});
+
 test('catalog changes during a modal keep live data until explicit acceptance',async()=>{
   const {c,$,calls,setResult,next}=catalogContext();
   assert.equal(await c.refreshCatalog(),true);c.state.cache.set('A',{rows:[{销量:10}]});const stamp=c.lastStamp;

@@ -5,7 +5,8 @@ const num=v=>{if(v===null||v===undefined||v==='')return null;const s=String(v).t
 const fmt=n=>n===null||n===undefined?'—':typeof n==='number'?n.toLocaleString('zh-CN',{maximumFractionDigits:3}):String(n);
 const colors=['#277763','#a96e25','#557ca7','#856697','#788a35','#a85f56'];
 const state={tables:[],page:'home',file:'',query:'',basket:[],cache:new Map(),charts:[],chartType:'auto',axisSwapped:false,limit:'全部',baseline:false};
-let renderToken=0, searchTimer, pollBusy=false, lastStamp='';
+const AUTO_REFRESH_INTERVAL=10*60*1000;
+let renderToken=0, searchTimer, syncProgressTimer, pollBusy=false, lastStamp='';
 function toast(message){$('#toast').textContent=message;$('#toast').style.display='block';if(typeof uiFeedback==='function')uiFeedback($('#toast'),'toast');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').style.display='none',4200);}
 async function api(path,body){const response=await fetch('/api/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.error||'请求失败');return data;}
 async function tableData(id){
@@ -62,6 +63,23 @@ function applyPendingCatalog(){
   if($('#dialog')?.open){toast('请先关闭当前弹窗，再加载新数据。');return Promise.resolve(false);}
   installCatalog(state.pendingCatalog);
   return go(state.page,{background:true}).then(()=>true);
+}
+function trackRequestedSync(){
+  clearTimeout(syncProgressTimer);
+  $('#syncButton').disabled=true;$('#syncStatus').textContent='正在同步…';
+  syncProgressTimer=setTimeout(refreshSyncProgress,1000);
+}
+async function refreshSyncProgress(){
+  syncProgressTimer=null;
+  try{
+    const changed=await refreshCatalog();
+    if(changed)await go(state.page,{background:true});
+    // Only a user-requested sync needs short-lived completion checks.
+    if(state.status?.busy)syncProgressTimer=setTimeout(refreshSyncProgress,5000);
+  }catch(e){
+    $('#syncButton').disabled=false;
+    $('#syncStatus').textContent='同步状态获取失败，请重试';toast(e.message);
+  }
 }
 function go(page,{background=false}={}){
   if(page==='raw'||page==='health')page='explore';
@@ -257,6 +275,6 @@ function saved(){
   document.querySelectorAll('[data-deleteview]').forEach(b=>b.onclick=()=>{all.splice(Number(b.dataset.deleteview),1);localStorage.setItem('shujian-views',JSON.stringify(all));saved();});
 }
 async function search(token){$('#main').innerHTML=header('SEARCH / 全局搜索','搜索「'+state.query+'」','同时查找文件、表名、字段以及单元格内容。')+'<div class="loading">正在搜索全部已导入数据…</div>';const result=await api('search?q='+encodeURIComponent(state.query));if(token!==renderToken)return;const resultSummary=`找到 ${result.hits.length} 个相关数据区域${result.hits.length>60?'，当前显示前 60 个；请缩小关键词查看其他结果。':'。'}每表展示最多 3 条示例。`;$('#main').innerHTML=header('SEARCH / 全局搜索','搜索「'+state.query+'」',resultSummary)+`<p class="search-summary" role="status">${resultSummary}</p><div class="results">${result.hits.slice(0,60).map(({table:t,rows})=>`<article class="panel"><div class="sectionhead" style="margin:0 0 12px"><div><h3>${esc(t.table_name)}</h3><p>${esc(t.relative_path)} / ${esc(t.sheet_name)} / ${esc(t.range_ref)}</p></div><button data-view="${t.id}">浏览数据 →</button></div><p class="meta">${t.fields.filter(f=>state.query.split(/\s+/).some(w=>f.name.includes(w))).slice(0,8).map(f=>`<button class="fieldchip" data-add="${t.id}" data-metric="${esc(f.name)}">${esc(f.name)} ＋</button>`).join('')}</p>${rows.map(row=>`<div class="resultrow"><span class="tag">行 ${esc(row._source_row)}</span> ${Object.entries(row).filter(([k])=>!k.startsWith('_')).slice(0,8).map(([k,v])=>`${esc(k)} <b>${esc(fmt(v))}</b>`).join(' · ')}</div>`).join('')}</article>`).join('')}</div>`+(result.hits.length?'':empty('没有找到匹配数据','尝试缩短关键词，或同步刚放入文件夹的新文件。'));bindTableActions();}
-function sourceDialog(){$('#dialogBody').innerHTML=`<div class="eyebrow">DATA SOURCE / 数据源</div><h2>连接持续更新的文件夹</h2><p class="meta">递归读取子目录中的 .xlsx 和 .xlsm。文件保留原样，失败时保留上次数据。</p><div class="formgrid"><label>本地文件夹路径<input id="folderPath" value="${esc(state.config.folder)}"></label><label class="inline"><input id="autoSync" type="checkbox" ${state.config.auto?'checked':''}> 服务运行期间，每 60 秒检查新增和变更文件</label><button class="primary" id="connectFolder">保存并同步</button><p class="meta">切换目录或移走文件时，已导入的数据保留为历史来源。工作台推荐只使用当前目录。</p></div>`;$('#dialog').showModal();$('#connectFolder').onclick=async()=>{try{await api('config',{folder:$('#folderPath').value,auto:$('#autoSync').checked});$('#dialog').close();toast('已开始同步文件夹');await refreshCatalog();}catch(e){toast(e.message);}};}
-$('#nav').onclick=e=>{const b=e.target.closest('[data-page]');if(b)go(b.dataset.page);};$('#sourceButton').onclick=sourceDialog;$('#syncButton').onclick=async()=>{try{$('#syncButton').disabled=true;await api('sync',{});toast('正在同步新增和变更文件');}catch(e){toast(e.message);}};$('#search').oninput=e=>{clearTimeout(searchTimer);state.query=e.target.value.trim();searchTimer=setTimeout(()=>{if(state.query)go('search',{background:true});else go('home',{background:true});},450);};document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)){e.preventDefault();$('#search').focus();}});
-window.addEventListener('DOMContentLoaded',async()=>{try{await refreshCatalog();try{state.basket=JSON.parse(localStorage.getItem('shujian-basket')||'[]');}catch{}persistBasket();go(['home','raw','explore','compare','saved','health'].includes(location.hash.slice(1))?location.hash.slice(1):'home');setInterval(async()=>{if(pollBusy)return;pollBusy=true;try{const changed=await refreshCatalog();if(changed)go(state.page,{background:true});}catch(e){$('#syncStatus').textContent='连接中断，请检查本地服务';}finally{pollBusy=false;}},5000);}catch(e){$('#main').innerHTML=empty('数据服务未连接',esc(e.message));}});
+function sourceDialog(){$('#dialogBody').innerHTML=`<div class="eyebrow">DATA SOURCE / 数据源</div><h2>连接持续更新的文件夹</h2><p class="meta">递归读取子目录中的 .xlsx 和 .xlsm。文件保留原样，失败时保留上次数据。</p><div class="formgrid"><label>本地文件夹路径<input id="folderPath" value="${esc(state.config.folder)}"></label><label class="inline"><input id="autoSync" type="checkbox" ${state.config.auto?'checked':''}> 服务运行期间，每 60 秒检查新增和变更文件</label><button class="primary" id="connectFolder">保存并同步</button><p class="meta">切换目录或移走文件时，已导入的数据保留为历史来源。工作台推荐只使用当前目录。</p></div>`;$('#dialog').showModal();$('#connectFolder').onclick=async()=>{try{await api('config',{folder:$('#folderPath').value,auto:$('#autoSync').checked});$('#dialog').close();toast('已开始同步文件夹');trackRequestedSync();}catch(e){toast(e.message);}};}
+$('#nav').onclick=e=>{const b=e.target.closest('[data-page]');if(b)go(b.dataset.page);};$('#sourceButton').onclick=sourceDialog;$('#syncButton').onclick=async()=>{try{$('#syncButton').disabled=true;await api('sync',{});toast('正在同步新增和变更文件');trackRequestedSync();}catch(e){$('#syncButton').disabled=false;toast(e.message);}};$('#search').oninput=e=>{clearTimeout(searchTimer);state.query=e.target.value.trim();searchTimer=setTimeout(()=>{if(state.query)go('search',{background:true});else go('home',{background:true});},450);};document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)){e.preventDefault();$('#search').focus();}});
+window.addEventListener('DOMContentLoaded',async()=>{try{await refreshCatalog();try{state.basket=JSON.parse(localStorage.getItem('shujian-basket')||'[]');}catch{}persistBasket();go(['home','raw','explore','compare','saved','health'].includes(location.hash.slice(1))?location.hash.slice(1):'home');setInterval(async()=>{if(pollBusy)return;pollBusy=true;try{const changed=await refreshCatalog();if(changed)go(state.page,{background:true});}catch(e){$('#syncStatus').textContent='连接中断，请检查本地服务';}finally{pollBusy=false;}},AUTO_REFRESH_INTERVAL);}catch(e){$('#main').innerHTML=empty('数据服务未连接',esc(e.message));}});
