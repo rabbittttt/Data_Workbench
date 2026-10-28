@@ -6,6 +6,7 @@
   --text-secondary:#52665d;
 }
 body{font-size:14px;line-height:1.55}
+img.brandmark{display:block;flex-shrink:0;background:transparent;border-radius:0;object-fit:contain}
 main,.app,.pagehead>div,.sectionhead>div{min-width:0}
 main :is(button,input,select,summary,[tabindex]){scroll-margin-top:88px;scroll-margin-bottom:100px}
 h1{font-size:21px;line-height:1.35;letter-spacing:-.25px}
