@@ -1,10 +1,13 @@
 """Local data workspace. Run: python server.py (http://127.0.0.1:8765)."""
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, unquote
 from dataclasses import asdict
+from html import escape, unescape
+from io import BytesIO
 import json
 import hashlib
+import re
 import threading
 import time
 import pandas as pd
@@ -117,6 +120,61 @@ def original_sheet(path, sheet_name=None, start=1, column=1):
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT / 'web'), **kwargs)
+
+    def versioned_html(self, path, body):
+        root = (ROOT / 'web').resolve()
+        versions = {}
+
+        def version_asset(match):
+            url = urlparse(unescape(match['url']))
+            if url.scheme or url.netloc or not url.path:
+                return match[0]
+            base = root if url.path.startswith('/') else path.parent
+            asset = (base / unquote(url.path).lstrip('/')).resolve()
+            if not asset.is_relative_to(root) or not asset.is_file():
+                return match[0]
+            if asset not in versions:
+                versions[asset] = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
+            query = [(key, value) for key, value in parse_qsl(url.query) if key != 'v']
+            query.append(('v', versions[asset]))
+            versioned = url._replace(query=urlencode(query)).geturl()
+            return match['prefix'] + escape(versioned, quote=True) + match['quote']
+
+        return re.sub(r'(?P<prefix>\b(?:src|href)=(?P<quote>[\"\x27]))(?P<url>[^\"\x27]+)(?P=quote)',
+                      version_asset, body.decode('utf-8')).encode('utf-8')
+
+    def send_head(self):
+        path = Path(self.translate_path(self.path))
+        if path.is_dir():
+            if not urlparse(self.path).path.endswith('/'):
+                return super().send_head()
+            path = path / 'index.html'
+        if not path.is_file():
+            return super().send_head()
+        try:
+            body = path.read_bytes()
+            if path.suffix.lower() == '.html':
+                body = self.versioned_html(path, body)
+        except OSError:
+            self.send_error(404, 'File not found')
+            return None
+        # Content validators stay correct after Git pulls even when timestamps match.
+        # Deliberately ignore If-Modified-Since; it cannot validate changed bytes.
+        etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+        candidates = [value.strip().removeprefix('W/')
+                      for value in self.headers.get('If-None-Match', '').split(',')]
+        unchanged = etag in candidates or '*' in candidates
+        self.send_response(304 if unchanged else 200)
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('ETag', etag)
+        if not unchanged:
+            content_type = self.guess_type(str(path))
+            if content_type == 'text/html':
+                content_type += '; charset=utf-8'
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        return None if unchanged else BytesIO(body)
 
     def send_json(self, payload, code=200):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode('utf-8')
