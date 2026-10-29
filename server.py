@@ -1,5 +1,6 @@
 """Local data workspace. Run: python server.py (http://127.0.0.1:8765)."""
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, unquote
 from dataclasses import asdict
@@ -8,8 +9,11 @@ from io import BytesIO
 import json
 import hashlib
 import re
+import argparse
+import socket
 import threading
 import time
+import webbrowser
 import pandas as pd
 from openpyxl import load_workbook
 from warehouse import Warehouse
@@ -289,7 +293,62 @@ def watch():
         time.sleep(60)
 
 
+WORKBENCH_URL = 'http://127.0.0.1:8765'
+
+
+class WorkbenchHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            # Windows must not let a second launcher share the same listening port.
+            self.allow_reuse_address = False
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def open_workbench():
+    try:
+        if webbrowser.open(WORKBENCH_URL, new=2):
+            return
+    except webbrowser.Error:
+        pass
+    print(f'未能自动打开浏览器，请手动访问 {WORKBENCH_URL}', flush=True)
+
+
+def workbench_running():
+    connection = HTTPConnection('127.0.0.1', 8765, timeout=2)
+    try:
+        connection.request('GET', '/')
+        response = connection.getresponse()
+        title = '<title>数见 · 经营数据工作台</title>'.encode('utf-8')
+        return response.status == 200 and title in response.read(16384)
+    except (OSError, HTTPException):
+        return False
+    finally:
+        connection.close()
+
+
+def run_server(open_browser=False):
+    try:
+        httpd = WorkbenchHTTPServer(('127.0.0.1', 8765), Handler)
+    except OSError:
+        if open_browser and workbench_running():
+            print('工作台已经运行，正在打开现有页面。', flush=True)
+            open_workbench()
+            return
+        raise
+    with httpd:
+        threading.Thread(target=watch, daemon=True).start()
+        print(f'数据速查工作台: {WORKBENCH_URL}', flush=True)
+        if open_browser:
+            # The listening socket is ready before the browser can request the page.
+            threading.Thread(target=open_workbench, daemon=True).start()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+
+
 if __name__ == '__main__':
-    threading.Thread(target=watch, daemon=True).start()
-    print('数据速查工作台: http://127.0.0.1:8765', flush=True)
-    ThreadingHTTPServer(('127.0.0.1', 8765), Handler).serve_forever()
+    parser = argparse.ArgumentParser(description='数见 · 经营数据工作台')
+    parser.add_argument('--open-browser', action='store_true', help='服务启动后自动打开浏览器')
+    run_server(open_browser=parser.parse_args().open_browser)
