@@ -146,7 +146,6 @@ button.link{min-height:32px;padding:4px 6px}
   #nav{position:fixed;left:0;right:0;bottom:0;z-index:25;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:0;padding:7px max(8px,env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));background:var(--nav);border-top:1px solid #436054;box-shadow:0 -3px 14px #152b2b1a;overflow:visible}
   #nav button{min-width:0;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:6px 2px;font-size:12px;line-height:1.3;text-align:center;border-radius:8px;white-space:normal}
   #nav button span{font-size:12px;line-height:1.3;white-space:normal}
-  #nav button .nav-icon{width:20px;height:18px;flex:0 0 18px;font-size:18px;justify-content:center}
   #nav em{display:none}
   .topbar{position:sticky;top:0;z-index:20;height:auto;display:flex;flex-wrap:wrap;gap:8px;padding:10px 14px;background:#f4f6f2}
   .search{flex:1 1 100%;max-width:none;min-width:0;min-height:44px;gap:8px;padding:0 10px;border:1px solid var(--control-border);border-radius:8px;background:#fff}

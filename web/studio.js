@@ -1,18 +1,5 @@
 'use strict';
-document.querySelectorAll('#nav button').forEach(button=>{
-  const textNode=button.firstChild;
-  if(textNode?.nodeType===Node.TEXT_NODE){
-    const icon=document.createElement('span');
-    icon.className='nav-icon';
-    icon.setAttribute('aria-hidden','true');
-    icon.textContent=textNode.textContent.trim();
-    button.replaceChild(icon,textNode);
-  }
-});
 // Keep the existing aggregation / saved-analysis contract; change the primary workflow.
-const compareNav=document.querySelector('[data-page="compare"] span:not(.nav-icon)');
-compareNav.textContent='图表展示';
-document.querySelector('[data-page="explore"] span:not(.nav-icon)').textContent='数据管理';
 let builderVersion=0;
 const draft={id:'',metric:'',dimension:'',vehicleField:'',vehicleValue:'',filterField:'',filterValue:'',wide:false,periodGrain:'',periods:[]};
 const original={id:'',sheet:'',start:1,column:1};
