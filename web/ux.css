@@ -136,6 +136,95 @@ button.link{min-height:32px;padding:4px 6px}
 .skip-link:focus{transform:translateY(0)}
 #nav button[aria-current=page]{background:#304c40;color:#fff;font-weight:600}
 
+/* Compact desktop density; preserve the plotting area and touch-sized mobile controls. */
+@media(min-width:761px){
+  body{font-size:13px;line-height:1.45}
+  h1,.pagehead h1{font-size:19px}
+  h2,.chart-section-heading h2{font-size:16px}
+  h3,.recommend-grid h3{font-size:13px}
+  .rail{width:140px;padding:16px 8px 10px}
+  .app{margin-left:140px}
+  .brand{font-size:17px;gap:6px}
+  .brandmark{width:28px;height:28px}
+  .brand small{font-size:8px;letter-spacing:1px}
+  .workspace{padding:10px 0 8px}
+  #nav button{min-height:32px;padding:6px;font-size:13px;line-height:1.4}
+  #nav button span{font-size:inherit}
+  .rail-bottom{padding:10px 6px 0}
+  .rail-bottom button{padding-top:6px}
+  .topbar{height:48px;padding:0 16px;gap:10px}
+  .search{gap:8px}
+  .search>span{font-size:21px}
+  .search input{font-size:13px;padding:5px 8px}
+  .top-actions{gap:10px}
+  main{padding:14px 16px 28px}
+  main :is(button,input,select,summary,[tabindex]){scroll-margin-top:64px}
+  button,input,select{min-height:32px;font-size:13px;padding:5px 9px}
+  button.link{min-height:28px;padding:3px 5px}
+  input[type=checkbox],input[type=radio]{width:15px;height:15px;min-height:0;padding:0}
+  .panel,.results .panel,.recommend-grid .panel,.saved-card{padding:14px;margin-bottom:12px}
+  .studio-settings-card,.studio-settings-card>.studio-builder{padding:0}
+  .sectionhead{margin:12px 0 8px;gap:8px}
+  .sectionhead p,.meta,.pagehead p,.preview-status,#mappingSummary{font-size:12px;line-height:1.45}
+  .meta{margin:6px 0}
+  .hero{padding:14px 16px;margin-bottom:12px;gap:12px}
+  .hero h2{font-size:20px;margin:2px 0 6px}
+  .hero-art{height:60px;width:130px}
+  .stats{gap:10px;margin-bottom:14px}
+  .stat{padding:10px 12px}
+  .stat b{font-size:22px;margin:2px 0;line-height:1.35}
+  .stat span{font-size:12px}
+  .cards,.recommend-grid{gap:10px}
+  .cardtop{padding:12px 12px 0}
+  .cardtop h3{font-size:13px}
+  .cardfoot{padding:8px 12px}
+  .home-actions,.page-actions,.toolbar{gap:6px}
+  .toolbar{margin-bottom:10px}
+  .studio-layout{gap:8px}
+  .studio-layout .panel{margin-bottom:8px}
+  .series-toolbar{padding:8px 12px;gap:8px}
+  .series-toolbar>div{gap:6px}
+  .studio-builder>summary,.mapping-picker>summary,.applied-series-manager>summary,.hierarchy-disclosure>summary,.builder-more>summary,.numeric-details>summary{min-height:34px;padding:6px 10px;font-size:12px;gap:6px}
+  .studio-settings-heading strong{font-size:13px}
+  .studio-builder>#studioBuilder{padding:8px 12px 10px}
+  .studio-fields,.studio-builder .compact-fields,.builder-more .studio-fields{gap:6px 10px;margin:8px 0}
+  .studio-fields label,.studio-builder .studio-fields label,.raw-toolbar label,.mapping-measures>label,.filter-row label{font-size:12px;gap:3px}
+  .studio-fields input,.studio-fields select,.studio-builder .studio-fields select,.raw-toolbar select,.file-scope select,.studio-builder .studio-actions button,.picker-tools button,.picker-pages button{min-height:32px;padding:5px 9px;font-size:13px}
+  .studio-builder .studio-actions{gap:6px}
+  .applied-series-manager>.series-ribbon{padding:6px 12px 10px}
+  .series-ribbon,.series-ribbon.many-series{gap:6px}
+  .series-ribbon .series-edit{padding:5px 8px;font-size:12px}
+  .series-ribbon .series-remove{width:30px;height:30px;min-height:30px;flex-basis:30px}
+  .preview-bar{grid-template-columns:minmax(170px,220px) minmax(0,1fr);padding:8px;gap:8px;margin:6px 0}
+  .preview-bar label{font-size:12px;gap:3px}
+  .mapping-picker,.hierarchy-disclosure,.series-picker{margin:6px 0}
+  .mapping-picker>.series-picker{padding:0 10px 8px}
+  .mapping-hint,.mapping-measures,.filter-row{gap:8px}
+  .hierarchy-disclosure .hierarchy-fields{padding:6px 10px}
+  .builder-more>summary{padding-left:0;padding-right:0}
+  .picker-tools{margin:6px 0;gap:6px}
+  .series-choices{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:4px 8px}
+  .series-choices label,.mapping-picker .series-choices label{min-height:28px;padding:3px;font-size:12px;gap:6px}
+  #metricChoices .series-choices{max-height:148px}
+  .row-recognition>summary{min-height:32px;padding:5px 0;font-size:12px}
+  .metric-preview{margin:6px 0;gap:4px}
+  .chart-section-heading{gap:8px;margin-bottom:8px}
+  .charttools{gap:6px;margin-bottom:10px}
+  .charttools label{font-size:12px;gap:4px}
+  .file-scope,.raw-toolbar{gap:8px;margin-bottom:10px}
+  .sheet-tabs{padding:8px 0;gap:4px}
+  th,td{padding:6px 9px;font-size:12px}
+  .raw-grid td{min-width:96px}
+  .pagination{margin-top:10px;gap:8px}
+  .region-inspector{padding:10px 12px;margin:8px 0}
+  .catalog-update,.notice{padding:7px 10px;margin-bottom:10px;font-size:12px}
+  .builder-loading{min-height:34px;margin-bottom:8px;padding:7px 10px;font-size:12px}
+  dialog{padding:20px}
+  .formgrid{gap:10px;margin-top:14px}
+  .empty{padding:32px 16px}
+  .resultrow,.issue{padding:7px 0}
+}
+
 @media(max-width:760px){
   body{font-size:14px}
   .rail{position:static;width:100%;padding:10px 14px 8px}
