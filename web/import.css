@@ -1,6 +1,11 @@
 /* Keep the upload workflow separate from chart settings and source selection. */
-#importDialog{max-width:580px}
-#importDialog h2{font-size:18px}
+#importDialog,#importOverwriteDialog{max-width:580px}
+#importDialog h2,#importOverwriteDialog h2{font-size:18px}
+#importOverwriteDialog p{line-height:1.6;overflow-wrap:anywhere}
+.import-conflict-name{font-weight:600;margin-top:14px}
+#importOverwriteDialog .import-actions{flex-wrap:wrap}
+.import-replace{background:#a22d25;color:white;border-color:#a22d25}
+.import-replace:hover{background:#85251f;border-color:#85251f}
 #importDialog .meta{line-height:1.6}
 .import-destination{font-size:12px;line-height:1.6;background:#f3f6f1;border-radius:6px;padding:8px 10px;margin:12px 0;overflow-wrap:anywhere}
 .import-destination span{display:block;color:var(--text-secondary)}

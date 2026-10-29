@@ -57,10 +57,26 @@
     done.textContent='关闭';
   });
 
-  function upload(file,index){
+  function confirmOverwrite(file,conflict,changed){
+    const confirmation=document.querySelector('#importOverwriteDialog');
+    document.querySelector('#importOverwriteName').textContent=conflict.name;
+    document.querySelector('#importOverwriteFolder').textContent=folder;
+    document.querySelector('#importOverwriteSizes').textContent=`已有文件：${sizeLabel(conflict.size)} · 即将导入：${sizeLabel(file.size)}`;
+    document.querySelector('#importOverwriteChanged').hidden=!changed;
+    confirmation.returnValue='skip';
+    return new Promise(resolve=>{
+      confirmation.addEventListener('close',()=>resolve(confirmation.returnValue==='replace'),{once:true});
+      confirmation.showModal();
+      confirmation.querySelector('[value="skip"]').focus();
+    });
+  }
+
+  function upload(file,index,replaceVersion=''){
     return new Promise((resolve,reject)=>{
       const xhr=new XMLHttpRequest();
-      xhr.open('POST','/api/import?'+new URLSearchParams({filename:file.name,folder}));
+      const params=new URLSearchParams({filename:file.name,folder});
+      if(replaceVersion)params.set('replace_version',replaceVersion);
+      xhr.open('POST','/api/import?'+params);
       xhr.setRequestHeader('Content-Type','application/octet-stream');
       xhr.timeout=180000;
       xhr.upload.onprogress=event=>{
@@ -72,7 +88,8 @@
       xhr.onload=()=>{
         let response;
         try{response=JSON.parse(xhr.responseText);}catch{return reject(Error('服务返回异常，请检查数据管理中的文件后再重试'));}
-        if(xhr.status>=200&&xhr.status<300&&response.saved)resolve(response);
+        if(xhr.status===409&&response.overwrite_required)resolve(response);
+        else if(xhr.status>=200&&xhr.status<300&&response.saved)resolve(response);
         else reject(Error(response.error||`导入失败（${xhr.status}），请重试`));
       };
       xhr.onerror=()=>reject(Error('连接中断，请先到数据管理确认文件是否已保存，再重试'));
@@ -91,13 +108,29 @@
         status.textContent=`正在导入 ${index+1} / ${jobs.length}；关闭此窗口可继续使用页面。`;
         updateJob(index,'uploading','正在上传…');
         try{
-          const result=await upload(jobs[index].file,index);
-          updateJob(index,'saved',result.renamed?`已保存为 ${result.name}（保留原同名文件）`:'已保存');
+          let replaceVersion='';
+          while(true){
+            const result=await upload(jobs[index].file,index,replaceVersion);
+            if(!result.overwrite_required){
+              updateJob(index,'saved',result.overwritten?'已覆盖原文件':`已保存：${result.name}`);
+              break;
+            }
+            updateJob(index,'confirming','同名文件已存在，等待确认覆盖');
+            entry.textContent='待确认';status.textContent=`正在等待确认：${jobs[index].file.name}`;
+            const confirmed=await confirmOverwrite(jobs[index].file,result,!!replaceVersion);
+            entry.textContent='导入中';
+            if(!confirmed){updateJob(index,'skipped','已跳过，原文件保留');break;}
+            replaceVersion=result.version;
+            status.textContent=`正在覆盖 ${index+1} / ${jobs.length}…`;
+            updateJob(index,'uploading','已确认，正在上传并覆盖…');
+          }
         }catch(error){updateJob(index,'error',error.message);}
         progress.value=index+1;
       }
       const saved=jobs.filter(job=>job.result==='saved').length;
-      const summary=`已保存 ${saved} 个文件${jobs.length>saved?`，${jobs.length-saved} 个未导入，请查看逐项提示`:''}。`;
+      const skipped=jobs.filter(job=>job.result==='skipped').length;
+      const failed=jobs.filter(job=>job.result==='error').length;
+      const summary=`已保存 ${saved} 个文件${skipped?`，已跳过 ${skipped} 个`:''}${failed?`，${failed} 个导入失败，请查看逐项提示`:''}。`;
       status.textContent=summary;
       if(saved){
         try{

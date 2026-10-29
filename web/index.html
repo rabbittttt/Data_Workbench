@@ -27,12 +27,21 @@
 <dialog id="dialog"><div id="dialogBody"></div><form method="dialog"><button class="dialog-close" aria-label="关闭对话框">×</button></form></dialog><div id="toast" role="status" aria-live="polite"></div>
 <dialog id="importDialog" aria-labelledby="importTitle">
   <h2 id="importTitle">导入 Excel 文件</h2>
-  <p class="meta">支持多选 .xlsx、.xlsm，单个文件不超过 256 MB。同名文件自动编号保留，原表内容保持不变。</p>
+  <p class="meta">支持多选 .xlsx、.xlsm，单个文件不超过 256 MB。同名文件会先请你确认，确认后覆盖原文件；取消则跳过该文件。</p>
   <p class="import-destination">保存到当前数据源：<span id="importFolder">正在读取…</span></p>
   <label class="import-picker" for="importFiles">选择文件<input id="importFiles" type="file" accept=".xlsx,.xlsm" multiple aria-describedby="importStatus"></label>
   <ul id="importList" class="import-list" aria-label="文件导入结果"></ul>
   <progress id="importProgress" max="1" value="0" aria-label="文件上传进度" hidden></progress>
   <p id="importStatus" class="meta" role="status" aria-live="polite">选择文件后开始导入。</p>
   <div class="import-actions"><button id="importStart" class="primary" disabled>开始导入</button><form method="dialog"><button id="importDone">关闭</button></form></div>
+</dialog>
+<dialog id="importOverwriteDialog" aria-labelledby="importOverwriteTitle" aria-describedby="importOverwriteNote">
+  <h2 id="importOverwriteTitle">确认覆盖同名文件？</h2>
+  <p id="importOverwriteName" class="import-conflict-name"></p>
+  <p id="importOverwriteFolder" class="import-destination"></p>
+  <p id="importOverwriteSizes" class="meta"></p>
+  <p id="importOverwriteNote">新文件将替换上述目录中的原文件，原内容无法在工作台内撤销。取消会跳过此文件，继续导入其他文件。</p>
+  <p id="importOverwriteChanged" class="meta" hidden>文件在上次确认后已发生变化，请核对后再次确认。</p>
+  <form method="dialog" class="import-actions"><button value="skip" autofocus>取消，保留原文件</button><button value="replace" class="import-replace">确认覆盖</button></form>
 </dialog>
 </body></html>

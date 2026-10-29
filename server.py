@@ -68,7 +68,21 @@ def request_sync():
         threading.Thread(target=sync_worker, daemon=True).start()
 
 
-def import_workbook(stream, name, size, expected_folder):
+class ImportConflict(ValueError):
+    def __init__(self, path, changed=False):
+        # Bind the confirmation to the current file, not every future file with
+        # this name. A concurrent import/edit requires another confirmation.
+        stat = path.stat()
+        signature = f'{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}'
+        self.payload = {
+            'error': '同名文件已发生变化，请再次确认覆盖' if changed else '已存在同名文件，请确认是否覆盖',
+            'overwrite_required': True, 'name': path.name, 'size': stat.st_size,
+            'version': hashlib.sha256(signature.encode()).hexdigest(),
+        }
+        super().__init__(self.payload['error'])
+
+
+def import_workbook(stream, name, size, expected_folder, replace_version=''):
     """Store the original bytes; incomplete uploads never become scanned workbooks."""
     if (not name or len(name) > 240 or name.endswith((' ', '.'))
             or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
@@ -100,27 +114,45 @@ def import_workbook(stream, name, size, expected_folder):
         try:
             with temporary.open('rb') as source:
                 book = load_workbook(source, read_only=True, data_only=True)
-                book.close()
+                try:
+                    # Read-only loading is lazy: broken cell XML can otherwise
+                    # survive validation and replace a good original workbook.
+                    for sheet in book.worksheets:
+                        sheet.reset_dimensions()
+                        for _ in sheet.iter_rows(values_only=True):
+                            pass
+                finally:
+                    book.close()
         except Exception as exc:
             raise ValueError('无法读取此 Excel，文件可能损坏或已加密，请用 Excel 打开后另存再导入') from exc
         with LOCK:
             if Path(config()['folder']).resolve() != folder:
                 raise ValueError('上传期间数据源目录已变更，请重新打开导入窗口')
             destination = folder / name
-            number = 1
-            while True:
+            if destination.is_symlink() or destination.exists() and not destination.is_file():
+                raise ValueError('同名目标不是普通文件，请先在数据源文件夹中检查')
+            overwritten = destination.exists()
+            if overwritten:
+                conflict = ImportConflict(destination, changed=bool(replace_version))
+                if replace_version != conflict.payload['version']:
+                    raise conflict
                 try:
-                    # Windows rename and POSIX hard-link creation both refuse an
-                    # existing destination, including concurrent same-name imports.
+                    # Publish only a complete, validated workbook. Failed replace
+                    # leaves the existing file intact (e.g. it is open in Excel).
+                    os.replace(temporary, destination)
+                except PermissionError as exc:
+                    raise ValueError('无法覆盖，文件可能正在被 Excel 使用或目录无写入权限。请关闭文件后重试；原文件已保留') from exc
+            else:
+                try:
+                    # Exclusive publication prevents an unconfirmed overwrite if
+                    # a file with this name appeared after the existence check.
                     if os.name == 'nt':
                         temporary.rename(destination)
                     else:
                         os.link(temporary, destination)
-                    break
                 except FileExistsError:
-                    destination = folder / f'{Path(name).stem} ({number}){Path(name).suffix}'
-                    number += 1
-        return {'saved': True, 'name': destination.name, 'renamed': destination.name != name}
+                    raise ImportConflict(destination)
+        return {'saved': True, 'name': destination.name, 'overwritten': overwritten}
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -345,7 +377,10 @@ class Handler(SimpleHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 self.connection.settimeout(120)
                 return self.send_json(import_workbook(self.rfile, query.get('filename', [''])[0], size,
-                                                      query.get('folder', [''])[0]), 201)
+                                                      query.get('folder', [''])[0],
+                                                      query.get('replace_version', [''])[0]), 201)
+            except ImportConflict as exc:
+                return self.send_json(exc.payload, 409)
             except (TimeoutError, ConnectionError):
                 return self.send_json({'error': '上传中断或超时，请检查连接后重新导入'}, 400)
             except Exception as exc:

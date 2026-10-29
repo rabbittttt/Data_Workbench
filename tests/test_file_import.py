@@ -12,6 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlencode
+from zipfile import ZipFile
 
 from openpyxl import Workbook
 
@@ -90,22 +91,25 @@ class FileImportHTTPTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def upload(self, name='销量.xlsx', content=None, *, folder=None, headers=None):
+    def upload(self, name='销量.xlsx', content=None, *, folder=None, headers=None,
+               replace_version=None):
         payload = self.content if content is None else content
         request_headers = {
             'Content-Type': 'application/octet-stream',
             'Content-Length': str(len(payload)),
         }
         request_headers.update(headers or {})
-        return self.request('import', method='POST', body=payload, headers=request_headers,
-                            filename=name, folder=str(self.folder if folder is None else folder))
+        params = {'filename': name, 'folder': str(self.folder if folder is None else folder)}
+        if replace_version is not None:
+            params['replace_version'] = replace_version
+        return self.request('import', method='POST', body=payload, headers=request_headers, **params)
 
     def test_upload_keeps_original_bytes_then_manual_sync_exposes_tables(self):
         for name in ['销量.xlsx', '宏数据.xlsm', 'UPPER.XLSX']:
             with self.subTest(name=name):
                 code, result = self.upload(name)
                 self.assertEqual(code, 201, result)
-                self.assertEqual(result, {'saved': True, 'name': name, 'renamed': False})
+                self.assertEqual(result, {'saved': True, 'name': name, 'overwritten': False})
                 self.assertEqual((self.folder / name).read_bytes(), self.content)
         self.assertTrue(self.store.catalog().empty, 'upload itself must not start a scan')
         self.assertFalse(self.status['busy'])
@@ -130,20 +134,148 @@ class FileImportHTTPTests(unittest.TestCase):
         self.assertEqual((self.folder / '销量.xlsx').read_bytes(), self.content,
                          'importing and parsing must not rewrite source bytes')
 
-    def test_duplicate_names_preserve_existing_files_and_return_actual_names(self):
-        (self.folder / '销量.xlsx').write_bytes(self.content)
+    def test_same_name_requires_confirmation_and_never_creates_numbered_copies(self):
+        original = self.folder / '销量.xlsx'
+        original.write_bytes(self.content)
+        other = self.folder / '其他.xlsx'
+        other_content = workbook_bytes(777)
+        other.write_bytes(other_content)
         incoming = workbook_bytes(999)
-        saved = []
-        for _ in range(2):
-            code, result = self.upload(content=incoming)
-            self.assertEqual(code, 201, result)
-            self.assertTrue(result['renamed'])
-            self.assertNotEqual(result['name'], '销量.xlsx')
-            self.assertEqual((self.folder / result['name']).read_bytes(), incoming)
-            saved.append(result['name'])
-        self.assertEqual(len(set(saved)), 2)
-        self.assertEqual((self.folder / '销量.xlsx').read_bytes(), self.content)
-        self.assertEqual(len(list(self.folder.iterdir())), 3)
+        version = None
+        for token in [None, None, 'not-the-confirmed-version']:
+            code, result = self.upload(content=incoming, replace_version=token)
+            self.assertEqual(code, 409, result)
+            self.assertTrue(result['overwrite_required'])
+            self.assertEqual(result['name'], original.name)
+            self.assertEqual(result['size'], len(self.content))
+            self.assertIsInstance(result['version'], str)
+            self.assertTrue(result['version'])
+            if version is not None:
+                self.assertEqual(result['version'], version)
+            version = result['version']
+            self.assertEqual(original.read_bytes(), self.content)
+            self.assertEqual(other.read_bytes(), other_content)
+            self.assertEqual({path.name for path in self.folder.iterdir()},
+                             {'销量.xlsx', '其他.xlsx'})
+
+    def test_confirmed_replace_preserves_dataset_id_and_sync_reads_new_values(self):
+        code, result = self.upload()
+        self.assertEqual(code, 201, result)
+        code, _ = self.request('sync', method='POST', body=b'{}',
+                               headers={'Content-Type': 'application/json'})
+        self.assertEqual(code, 200)
+        wait_until(lambda: not self.status['busy'])
+        code, before = self.request('catalog')
+        self.assertEqual(code, 200)
+        self.assertEqual(len(before['tables']), 1)
+        table_id = before['tables'][0]['id']
+        code, data = self.request('table', id=table_id)
+        self.assertEqual(data['rows'][0]['销量'], 100)
+
+        incoming = workbook_bytes(999)
+        code, conflict = self.upload(content=incoming)
+        self.assertEqual(code, 409, conflict)
+        code, result = self.upload(content=incoming, replace_version=conflict['version'])
+        self.assertEqual(code, 201, result)
+        self.assertEqual(result, {'saved': True, 'name': '销量.xlsx', 'overwritten': True})
+        self.assertEqual((self.folder / '销量.xlsx').read_bytes(), incoming)
+        self.assertEqual([path.name for path in self.folder.iterdir()], ['销量.xlsx'])
+        code, data = self.request('table', id=table_id)
+        self.assertEqual(data['rows'][0]['销量'], 100, 'replacement does not bypass batch sync')
+
+        code, _ = self.request('sync', method='POST', body=b'{}',
+                               headers={'Content-Type': 'application/json'})
+        self.assertEqual(code, 200)
+        wait_until(lambda: not self.status['busy'])
+        code, after = self.request('catalog')
+        self.assertEqual(code, 200)
+        self.assertEqual(after['status']['errors'], [])
+        self.assertEqual([table['id'] for table in after['tables']], [table_id])
+        code, data = self.request('table', id=table_id)
+        self.assertEqual(code, 200)
+        self.assertEqual(data['rows'][0]['销量'], 999)
+        self.assertEqual((self.folder / '销量.xlsx').read_bytes(), incoming)
+
+    def test_changed_existing_file_requires_new_confirmation(self):
+        original = self.folder / '销量.xlsx'
+        original.write_bytes(self.content)
+        incoming = workbook_bytes(999)
+        code, first = self.upload(content=incoming)
+        self.assertEqual(code, 409, first)
+        independently_updated = workbook_bytes(345)
+        original.write_bytes(independently_updated)
+
+        code, second = self.upload(content=incoming, replace_version=first['version'])
+        self.assertEqual(code, 409, second)
+        self.assertTrue(second['overwrite_required'])
+        self.assertNotEqual(second['version'], first['version'])
+        self.assertEqual(second['size'], len(independently_updated))
+        self.assertEqual(original.read_bytes(), independently_updated)
+        self.assertEqual([path.name for path in self.folder.iterdir()], ['销量.xlsx'])
+
+        code, result = self.upload(content=incoming, replace_version=second['version'])
+        self.assertEqual(code, 201, result)
+        self.assertTrue(result['overwritten'])
+        self.assertEqual(original.read_bytes(), incoming)
+
+    def test_invalid_confirmed_upload_keeps_original_and_cleans_temporary_files(self):
+        original = self.folder / '销量.xlsx'
+        original.write_bytes(self.content)
+        code, conflict = self.upload(content=workbook_bytes(999))
+        self.assertEqual(code, 409, conflict)
+        malformed_sheet = BytesIO()
+        with ZipFile(BytesIO(self.content)) as incoming, ZipFile(malformed_sheet, 'w') as outgoing:
+            for info in incoming.infolist():
+                body = incoming.read(info.filename)
+                if info.filename == 'xl/worksheets/sheet1.xml':
+                    # Metadata loads lazily; only reading the worksheet exposes this error.
+                    body = body.replace(b'</sheetData>', b'</sheetDataBROKEN>')
+                outgoing.writestr(info, body)
+        for content in [b'', b'not an Excel workbook', self.content[:100], malformed_sheet.getvalue()]:
+            with self.subTest(size=len(content)):
+                code, result = self.upload(content=content, replace_version=conflict['version'])
+                self.assertEqual(code, 400, result)
+                self.assertIn('error', result)
+                self.assertEqual(original.read_bytes(), self.content)
+                self.assertEqual([path.name for path in self.folder.iterdir()], ['销量.xlsx'])
+
+    def test_replace_failure_keeps_original_bytes_and_removes_temporary_file(self):
+        original = self.folder / '销量.xlsx'
+        original.write_bytes(self.content)
+        incoming = workbook_bytes(999)
+        code, conflict = self.upload(content=incoming)
+        self.assertEqual(code, 409, conflict)
+        with patch.object(server.os, 'replace', side_effect=PermissionError('workbook is open')) as replace:
+            code, result = self.upload(content=incoming, replace_version=conflict['version'])
+        self.assertEqual(code, 400, result)
+        replace.assert_called_once()
+        self.assertIn('error', result)
+        self.assertEqual(original.read_bytes(), self.content)
+        self.assertEqual([path.name for path in self.folder.iterdir()], ['销量.xlsx'])
+
+    def test_interrupted_confirmed_upload_does_not_touch_existing_file(self):
+        original = self.folder / '销量.xlsx'
+        original.write_bytes(self.content)
+        code, conflict = self.upload(content=workbook_bytes(999))
+        self.assertEqual(code, 409, conflict)
+        connection = HTTPConnection('127.0.0.1', self.httpd.server_port, timeout=5)
+        url = '/api/import?' + urlencode({
+            'filename': original.name, 'folder': str(self.folder),
+            'replace_version': conflict['version'],
+        })
+        try:
+            connection.request('POST', url, body=self.content[:100], headers={
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': str(len(self.content)),
+            })
+            connection.sock.shutdown(socket.SHUT_WR)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn('error', json.loads(response.read()))
+        finally:
+            connection.close()
+        self.assertEqual(original.read_bytes(), self.content)
+        self.assertEqual([path.name for path in self.folder.iterdir()], ['销量.xlsx'])
 
     def test_first_import_creates_default_folder_but_not_a_missing_custom_source(self):
         default = self.root / 'input_file'
