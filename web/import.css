@@ -1,0 +1,25 @@
+/* Keep the upload workflow separate from chart settings and source selection. */
+#importDialog{max-width:580px}
+#importDialog h2{font-size:18px}
+#importDialog .meta{line-height:1.6}
+.import-destination{font-size:12px;line-height:1.6;background:#f3f6f1;border-radius:6px;padding:8px 10px;margin:12px 0;overflow-wrap:anywhere}
+.import-destination span{display:block;color:var(--text-secondary)}
+.import-picker{display:grid;gap:6px;font-size:13px;font-weight:600}
+#importFiles{width:100%;max-width:100%;font-size:13px;font-weight:400}
+#importFiles::file-selector-button{border:1px solid var(--control-border);border-radius:5px;background:white;color:var(--ink);padding:6px 10px;margin-right:8px;cursor:pointer}
+.import-list{list-style:none;margin:12px 0;padding:0;max-height:260px;overflow:auto}
+.import-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+.import-list strong{font-weight:500;overflow-wrap:anywhere}
+.import-list small{color:var(--text-secondary);font-size:12px}
+.import-file-status{grid-column:1/-1;color:var(--text-secondary);overflow-wrap:anywhere}
+.import-list [data-result=error] .import-file-status{color:#a22d25}
+.import-list [data-result=saved] .import-file-status{color:#21654f}
+#importProgress{width:100%;height:8px;accent-color:var(--primary)}
+.import-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.import-actions form{margin:0}
+@media(max-width:600px){
+  .top-actions .action-detail{display:none}
+  .top-actions{gap:6px}
+  .top-actions button{padding:8px}
+  #importFiles::file-selector-button{min-height:44px}
+}

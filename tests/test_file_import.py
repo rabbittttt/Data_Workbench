@@ -1,0 +1,258 @@
+"""HTTP upload and queued-sync coverage using disposable workbooks only."""
+from contextlib import ExitStack
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
+from io import BytesIO
+import json
+from pathlib import Path
+import socket
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+from urllib.parse import urlencode
+
+from openpyxl import Workbook
+
+import server
+from warehouse import ScanResult, Warehouse
+
+
+def workbook_bytes(value=100):
+    book = Workbook()
+    book.active.title = '销量'
+    book.active.append(['车型', '销量'])
+    book.active.append(['M8', value])
+    book.active.append(['M9', 200])
+    output = BytesIO()
+    try:
+        book.save(output)
+        return output.getvalue()
+    finally:
+        book.close()
+        output.close()
+
+
+def wait_until(predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError('Timed out waiting for background sync')
+        time.sleep(0.01)
+
+
+class QuietHandler(server.Handler):
+    def log_message(self, *args):
+        pass
+
+
+class FileImportHTTPTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.folder = self.root / 'uploads'
+        self.folder.mkdir()
+        self.store = Warehouse(self.root / 'test.db')
+        self.status = {'busy': False, 'errors': [], 'last_sync': None}
+        self.stack = ExitStack()
+        self.stack.enter_context(patch.object(server, 'STORE', self.store))
+        self.stack.enter_context(patch.object(server, 'STATUS', self.status))
+        self.stack.enter_context(patch.object(server, 'LOCK', threading.RLock()))
+        self.stack.enter_context(patch.object(server, 'SYNC_LOCK', threading.Lock()))
+        self.stack.enter_context(patch.object(server, 'config', return_value={
+            'folder': str(self.folder), 'auto': False,
+        }))
+        self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), QuietHandler)
+        self.worker = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.worker.start()
+        self.content = workbook_bytes()
+
+    def tearDown(self):
+        try:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+            self.worker.join(timeout=5)
+            wait_until(lambda: not self.status['busy'])
+        finally:
+            self.stack.close()
+            self.temporary.cleanup()
+
+    def request(self, endpoint, *, method='GET', body=None, headers=None, **params):
+        url = '/api/' + endpoint
+        if params:
+            url += '?' + urlencode(params)
+        connection = HTTPConnection('127.0.0.1', self.httpd.server_port, timeout=5)
+        try:
+            connection.request(method, url, body=body, headers=headers or {})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def upload(self, name='销量.xlsx', content=None, *, folder=None, headers=None):
+        payload = self.content if content is None else content
+        request_headers = {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': str(len(payload)),
+        }
+        request_headers.update(headers or {})
+        return self.request('import', method='POST', body=payload, headers=request_headers,
+                            filename=name, folder=str(self.folder if folder is None else folder))
+
+    def test_upload_keeps_original_bytes_then_manual_sync_exposes_tables(self):
+        for name in ['销量.xlsx', '宏数据.xlsm', 'UPPER.XLSX']:
+            with self.subTest(name=name):
+                code, result = self.upload(name)
+                self.assertEqual(code, 201, result)
+                self.assertEqual(result, {'saved': True, 'name': name, 'renamed': False})
+                self.assertEqual((self.folder / name).read_bytes(), self.content)
+        self.assertTrue(self.store.catalog().empty, 'upload itself must not start a scan')
+        self.assertFalse(self.status['busy'])
+
+        code, started = self.request('sync', method='POST', body=b'{}',
+                                     headers={'Content-Type': 'application/json'})
+        self.assertEqual(code, 200)
+        self.assertTrue(started['started'])
+        wait_until(lambda: not self.status['busy'])
+        code, catalog = self.request('catalog')
+        self.assertEqual(code, 200)
+        self.assertEqual(catalog['status']['errors'], [])
+        self.assertEqual(len(catalog['tables']), 3)
+        file = next(file for file in catalog['files'] if file['name'] == '销量.xlsx')
+        code, sheet = self.request('sheet', id=file['id'], sheet='销量')
+        self.assertEqual(code, 200)
+        self.assertEqual(sheet['rows'], [['车型', '销量'], ['M8', 100], ['M9', 200]])
+        table = next(table for table in catalog['tables'] if table['file_name'] == '销量.xlsx')
+        code, data = self.request('table', id=table['id'])
+        self.assertEqual(code, 200)
+        self.assertEqual(data['rows'][0]['销量'], 100)
+        self.assertEqual((self.folder / '销量.xlsx').read_bytes(), self.content,
+                         'importing and parsing must not rewrite source bytes')
+
+    def test_duplicate_names_preserve_existing_files_and_return_actual_names(self):
+        (self.folder / '销量.xlsx').write_bytes(self.content)
+        incoming = workbook_bytes(999)
+        saved = []
+        for _ in range(2):
+            code, result = self.upload(content=incoming)
+            self.assertEqual(code, 201, result)
+            self.assertTrue(result['renamed'])
+            self.assertNotEqual(result['name'], '销量.xlsx')
+            self.assertEqual((self.folder / result['name']).read_bytes(), incoming)
+            saved.append(result['name'])
+        self.assertEqual(len(set(saved)), 2)
+        self.assertEqual((self.folder / '销量.xlsx').read_bytes(), self.content)
+        self.assertEqual(len(list(self.folder.iterdir())), 3)
+
+    def test_first_import_creates_default_folder_but_not_a_missing_custom_source(self):
+        default = self.root / 'input_file'
+        with patch.object(server, 'ROOT', self.root), patch.object(server, 'config', return_value={
+                'folder': str(default), 'auto': False}):
+            code, result = self.upload(folder=default)
+            self.assertEqual(code, 201, result)
+            self.assertEqual((default / '销量.xlsx').read_bytes(), self.content)
+        missing = self.root / 'removed-custom-source'
+        with patch.object(server, 'config', return_value={'folder': str(missing), 'auto': False}):
+            code, result = self.upload(folder=missing)
+            self.assertEqual(code, 400, result)
+            self.assertFalse(missing.exists())
+    def test_invalid_windows_names_and_unsupported_formats_leave_no_files(self):
+        invalid_names = [
+            '', '../outside.xlsx', '..\\outside.xlsx', 'C:\\outside.xlsx',
+            'name:stream.xlsx', 'bad?.xlsx', 'bad*.xlsx', 'bad|.xlsx',
+            'bad<.xlsx', 'bad>.xlsx', 'bad".xlsx', 'bad\n.xlsx',
+            'CON.xlsx', 'nul.xlsx', 'COM1.xlsm', 'LPT9.xlsx',
+            '~$临时.xlsx', 'trailing.xlsx ', 'trailing.xlsx.', 'legacy.xls', 'text.csv',
+        ]
+        for name in invalid_names:
+            with self.subTest(name=name):
+                code, result = self.upload(name)
+                self.assertEqual(code, 400, result)
+                self.assertIn('error', result)
+                self.assertEqual(list(self.folder.iterdir()), [])
+        self.assertFalse((self.root / 'outside.xlsx').exists())
+
+    def test_empty_and_damaged_workbooks_are_rejected_and_temporary_files_removed(self):
+        for content in [b'', b'not an Excel workbook', self.content[:100]]:
+            with self.subTest(size=len(content)):
+                code, result = self.upload(content=content)
+                self.assertEqual(code, 400, result)
+                self.assertIn('error', result)
+                self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_upload_requires_matching_destination_and_same_origin(self):
+        other = self.root / 'other'
+        other.mkdir()
+        code, result = self.upload(folder=other)
+        self.assertEqual(code, 400, result)
+        self.assertEqual(list(other.iterdir()), [])
+        code, result = self.upload(headers={'Origin': 'https://unrelated.invalid'})
+        self.assertEqual(code, 403, result)
+        self.assertEqual(list(self.folder.iterdir()), [])
+        code, result = self.upload(headers={
+            'Origin': f'http://127.0.0.1:{self.httpd.server_port}',
+        })
+        self.assertEqual(code, 201, result)
+
+    def test_oversized_import_returns_413_without_creating_a_file(self):
+        with patch.object(server, 'MAX_IMPORT_BYTES', len(self.content) - 1):
+            code, result = self.upload()
+        self.assertEqual(code, 413, result)
+        self.assertIn('error', result)
+        self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_disconnected_upload_does_not_publish_or_leave_a_partial_workbook(self):
+        connection = HTTPConnection('127.0.0.1', self.httpd.server_port, timeout=5)
+        url = '/api/import?' + urlencode({'filename': 'partial.xlsx', 'folder': str(self.folder)})
+        try:
+            connection.request('POST', url, body=self.content[:100], headers={
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': str(len(self.content)),
+            })
+            connection.sock.shutdown(socket.SHUT_WR)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertIn('error', json.loads(response.read()))
+        finally:
+            connection.close()
+        self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_request_while_busy_queues_a_second_scan_without_early_completion(self):
+        entered = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+        calls = []
+
+        def controlled_sync(folder):
+            index = len(calls)
+            calls.append(folder)
+            if index >= 2:
+                raise AssertionError('Unexpected extra scan')
+            entered[index].set()
+            if not release[index].wait(5):
+                raise AssertionError('Test did not release the scan')
+            return ScanResult(files=index + 1, tables=index + 1, rows=2, errors=[])
+
+        with patch.object(self.store, 'sync', side_effect=controlled_sync):
+            try:
+                server.request_sync()
+                self.assertTrue(entered[0].wait(5))
+                self.assertTrue(self.status['busy'])
+                server.request_sync()
+                self.assertTrue(self.status['busy'])
+                release[0].set()
+                self.assertTrue(entered[1].wait(5), 'the request during the first scan was lost')
+                self.assertTrue(self.status['busy'], 'the second scan must not appear completed')
+                release[1].set()
+                wait_until(lambda: not self.status['busy'])
+                self.assertEqual(calls, [str(self.folder), str(self.folder)])
+                self.assertEqual(self.status['errors'], [])
+                self.assertEqual(self.status['files'], 2)
+            finally:
+                for event in release:
+                    event.set()
+                wait_until(lambda: not self.status['busy'])
+
+
+if __name__ == '__main__':
+    unittest.main()

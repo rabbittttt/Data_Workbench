@@ -7,12 +7,14 @@ from dataclasses import asdict
 from html import escape, unescape
 from io import BytesIO
 import json
+import os
 import hashlib
 import re
 import argparse
 import socket
 import threading
 import time
+import tempfile
 import webbrowser
 import pandas as pd
 from openpyxl import load_workbook
@@ -21,26 +23,107 @@ from warehouse import Warehouse
 ROOT = Path(__file__).resolve().parent
 STORE = Warehouse(ROOT / 'output_file' / 'warehouse.db')
 LOCK = threading.RLock()
+SYNC_LOCK = threading.Lock()
 STATUS = {'busy': False, 'errors': [], 'last_sync': None}
 CONFIG = ROOT / 'output_file' / 'workspace.json'
+MAX_IMPORT_BYTES = 256 * 1024 * 1024
 
 
 def config():
     return json.loads(CONFIG.read_text(encoding='utf-8')) if CONFIG.exists() else {'folder': str(ROOT / 'input_file'), 'auto': True}
 
 
-def sync():
-    if STATUS['busy']:
-        return
-    with LOCK:
+def claim_sync():
+    with SYNC_LOCK:
+        if STATUS['busy']:
+            STATUS['pending'] = True
+            return False
         STATUS['busy'] = True
+        return True
+
+
+def sync_worker():
+    while True:
         try:
-            result = STORE.sync(config()['folder'])
+            with LOCK:
+                result = STORE.sync(config()['folder'])
             STATUS.update(asdict(result), last_sync=time.strftime('%Y-%m-%d %H:%M:%S'))
         except Exception as exc:
             STATUS['errors'] = [str(exc)]
-        finally:
+        with SYNC_LOCK:
+            # A request made during a scan must include files added after it began.
+            if STATUS.pop('pending', False):
+                continue
             STATUS['busy'] = False
+            return
+
+
+def sync():
+    if claim_sync():
+        sync_worker()
+
+
+def request_sync():
+    if claim_sync():
+        threading.Thread(target=sync_worker, daemon=True).start()
+
+
+def import_workbook(stream, name, size, expected_folder):
+    """Store the original bytes; incomplete uploads never become scanned workbooks."""
+    if (not name or len(name) > 240 or name.endswith((' ', '.'))
+            or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
+            or name.startswith('~$')
+            or re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]', name.split('.')[0], re.I)):
+        raise ValueError('文件名无效，请去掉路径、特殊字符或 Excel 临时文件前缀')
+    if Path(name).suffix.lower() not in {'.xlsx', '.xlsm'}:
+        raise ValueError('仅支持 .xlsx 和 .xlsm；旧版 .xls 请先另存为 .xlsx')
+    if size <= 0:
+        raise ValueError('文件为空或缺少文件长度')
+    folder = Path(config()['folder']).resolve()
+    if not expected_folder or Path(expected_folder).resolve() != folder:
+        raise ValueError('数据源目录已变更，请重新打开导入窗口')
+    if folder == (ROOT / 'input_file').resolve():
+        folder.mkdir(exist_ok=True)
+    if not folder.is_dir():
+        raise ValueError('数据源目录不存在，请在“管理数据源”中重新选择')
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder, prefix='.import-', suffix='.part', delete=False) as output:
+            temporary = Path(output.name)
+            remaining = size
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError('上传中断，文件未保存，请重新选择后导入')
+                output.write(chunk)
+                remaining -= len(chunk)
+        try:
+            with temporary.open('rb') as source:
+                book = load_workbook(source, read_only=True, data_only=True)
+                book.close()
+        except Exception as exc:
+            raise ValueError('无法读取此 Excel，文件可能损坏或已加密，请用 Excel 打开后另存再导入') from exc
+        with LOCK:
+            if Path(config()['folder']).resolve() != folder:
+                raise ValueError('上传期间数据源目录已变更，请重新打开导入窗口')
+            destination = folder / name
+            number = 1
+            while True:
+                try:
+                    # Windows rename and POSIX hard-link creation both refuse an
+                    # existing destination, including concurrent same-name imports.
+                    if os.name == 'nt':
+                        temporary.rename(destination)
+                    else:
+                        os.link(temporary, destination)
+                    break
+                except FileExistsError:
+                    destination = folder / f'{Path(name).stem} ({number}){Path(name).suffix}'
+                    number += 1
+        return {'saved': True, 'name': destination.name, 'renamed': destination.name != name}
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def catalog():
@@ -247,23 +330,40 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({'error': str(exc)}, 400)
 
     def do_POST(self):
-        # JSON + same-origin requests only; server listens exclusively on loopback.
+        # Non-simple content types + same origin; listen exclusively on loopback.
         if self.headers.get('Origin') and self.headers['Origin'] != 'http://' + self.headers.get('Host', ''):
             return self.send_json({'error': '来源不匹配'}, 403)
+        if urlparse(self.path).path == '/api/import':
+            try:
+                if self.headers.get('Content-Type', '').split(';')[0] != 'application/octet-stream':
+                    raise ValueError('需要文件二进制请求')
+                if self.headers.get('Transfer-Encoding'):
+                    raise ValueError('需要明确的文件长度')
+                size = int(self.headers.get('Content-Length', 0))
+                if size > MAX_IMPORT_BYTES:
+                    return self.send_json({'error': '单个文件不能超过 256 MB'}, 413)
+                query = parse_qs(urlparse(self.path).query)
+                self.connection.settimeout(120)
+                return self.send_json(import_workbook(self.rfile, query.get('filename', [''])[0], size,
+                                                      query.get('folder', [''])[0]), 201)
+            except (TimeoutError, ConnectionError):
+                return self.send_json({'error': '上传中断或超时，请检查连接后重新导入'}, 400)
+            except Exception as exc:
+                return self.send_json({'error': str(exc)}, 400)
         if 'application/json' not in self.headers.get('Content-Type', ''):
             return self.send_json({'error': '需要 JSON 请求'}, 400)
         try:
             payload = json.loads(self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 65536)) or b'{}')
             if self.path == '/api/sync':
-                if not STATUS['busy']:
-                    threading.Thread(target=sync, daemon=True).start()
+                request_sync()
                 return self.send_json({'started': True})
             if self.path == '/api/config':
                 folder = Path(payload['folder']).expanduser().resolve()
                 if not folder.is_dir():
                     raise ValueError('文件夹不存在')
-                CONFIG.write_text(json.dumps({'folder': str(folder), 'auto': bool(payload.get('auto', True))}, ensure_ascii=False), encoding='utf-8')
-                threading.Thread(target=sync, daemon=True).start()
+                with LOCK:
+                    CONFIG.write_text(json.dumps({'folder': str(folder), 'auto': bool(payload.get('auto', True))}, ensure_ascii=False), encoding='utf-8')
+                request_sync()
                 return self.send_json({'saved': True})
             if self.path == '/api/recognition':
                 from excel_parser import discover_tables, OVERRIDES
