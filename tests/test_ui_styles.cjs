@@ -30,10 +30,13 @@ assert.match(css,/\.tablewrap\{[^}]*max-width:100%/,'table overflow stays inside
 assert.match(css,/\.studio-builder>summary[^}]*justify-content:flex-start/,'disclosure indicator and label stay grouped');
 
 const mobile=css.slice(css.indexOf('@media(max-width:760px)'));
-assert.match(mobile,/#nav\{[^}]*position:fixed[^}]*bottom:0[^}]*grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/,'mobile primary navigation uses four fixed bottom tabs');
-assert.match(mobile,/#nav button\{[^}]*min-height:52px/);
-assert.match(mobile,/main\{padding:16px 12px calc\(104px \+ env\(safe-area-inset-bottom\)\)/,'content clears bottom tabs and device safe area');
-assert.match(mobile,/padding:7px max\(8px,env\(safe-area-inset-right\)\) calc\(7px \+ env\(safe-area-inset-bottom\)\)/);
+assert.match(mobile,/#nav\{[^}]*position:static[^}]*grid-column:1\/-1[^}]*grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/,'mobile navigation stays in the top header with four accessible destinations');
+assert.match(mobile,/#nav button\{[^}]*min-height:44px/);
+assert.match(mobile,/main\{padding:16px 12px calc\(24px \+ env\(safe-area-inset-bottom\)\)/,'content no longer reserves an obsolete bottom navigation strip');
+assert.match(mobile,/padding:6px max\(12px,env\(safe-area-inset-right\)\) 6px max\(12px,env\(safe-area-inset-left\)\)/);
+assert.match(css,/\.app\{margin-left:0\}/,'the content area starts at the left viewport edge');
+assert.match(css,/main\{max-width:none\}/,'wide screens can use the space released by the sidebar');
+assert.match(css,/\.topbar\{[^}]*top:var\(--workspace-header-height\)/,'sticky search clears the top navigation');
 assert.match(mobile,/\.series-ribbon \.series-remove\{width:44px;height:44px;min-height:44px/,'mobile delete target is fully touch-sized');
 assert.match(mobile,/\.series-choices label,\.mapping-picker \.series-choices label\{min-height:44px/);
 assert.match(mobile,/input:not\(\[type=checkbox\]\):not\(\[type=radio\]\),select[^}]*font-size:16px/,'mobile fields avoid small text and focus zoom');

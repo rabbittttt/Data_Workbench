@@ -20,7 +20,6 @@ function activeTables(){return state.tables.filter(t=>!t.archived);}
 function dispose(){state.charts.forEach(c=>c.dispose());state.charts=[];}
 function chart(element,option){if(!element)return;const instance=echarts.init(element);instance.setOption({color:colors,textStyle:{fontFamily:'Segoe UI, Microsoft YaHei'},animation:false,...option});state.charts.push(instance);return instance;}
 window.addEventListener('resize',()=>state.charts.forEach(c=>c.resize()));
-$('#mobileSource').onclick=sourceDialog;
 if(typeof MutationObserver==='function')new MutationObserver(()=>{if($('#dialog').open&&typeof uiFeedback==='function')uiFeedback($('#dialog'),'dialog');}).observe($('#dialog'),{attributes:true,attributeFilter:['open']});
 $('.brand').onclick=e=>{e.preventDefault();go('home');};
 function header(eyebrow){return `<div class="pagehead pagehead-compact"><h1 class="visually-hidden">${esc(eyebrow.split(' / ').at(-1))}</h1></div>`;}

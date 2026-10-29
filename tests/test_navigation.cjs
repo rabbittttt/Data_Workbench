@@ -11,6 +11,9 @@ vm.runInContext(studio.slice(studio.indexOf('async function dataPage('),studio.i
   for(const mode of ['raw','catalog','health']){context.state.dataView=mode;await context.dataPage(1);assert.equal(calls.pop(),'raw');}
   const html=fs.readFileSync('web/index.html','utf8');
   assert.equal((html.match(/data-page=/g)||[]).length,4);
+  assert.equal(html.includes('<header class="workspace-header">'),true);
+  assert.equal(html.includes('class="rail"'),false);
+  assert.equal(html.includes('mobileSource')||app.includes('mobileSource'),false);
   assert.equal(html.includes('data-page="raw"'),false);
   assert.equal(html.includes('data-page="health"'),false);
   assert.equal(app.includes("api('raw?id="),false);
@@ -20,5 +23,5 @@ vm.runInContext(studio.slice(studio.indexOf('async function dataPage('),studio.i
   assert.equal(studio.includes('data-data-view'),false);
   assert.equal(app.includes('function renderCatalog('),false);
   assert.equal(studio.includes('function inspectRegion('),true);
-  console.log('Unified navigation: 17 checks passed');
+  console.log('Unified navigation: 20 checks passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
